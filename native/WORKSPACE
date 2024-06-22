@@ -1,0 +1,88 @@
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_repository")
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# Group the sources of the library so that CMake rule have access to it
+all_content = """filegroup(name = "all", srcs = glob(["**"]), visibility = ["//visibility:public"])"""
+
+http_archive(
+  name = "com_google_absl",
+  urls = ["https://github.com/abseil/abseil-cpp/archive/2f9e432cce407ce0ae50676696666f33a77d42ac.zip"],
+  strip_prefix = "abseil-cpp-2f9e432cce407ce0ae50676696666f33a77d42ac",
+  sha256 = "efa465b26da194f82320b4e39e2ca637ebe3129d7f3732ee71d9942099e3c773",
+)
+
+new_git_repository(
+    name = "concurrentqueue",
+    remote = "https://github.com/cameron314/concurrentqueue.git",
+    commit = "79cec4c3bf1ca23ea4a03adfcd3c2c3659684dd2",
+    shallow_since = "1580387311 -0500",
+    build_file_content = """
+
+cc_library(
+    name = "concurrentqueue",
+    hdrs = ["concurrentqueue.h", "blockingconcurrentqueue.h", "lightweightsemaphore.h"],
+    visibility = ["//visibility:public"],
+)
+""",
+)
+
+http_archive(
+    name = "streamvbyte",
+    url = "https://github.com/lemire/streamvbyte/archive/refs/tags/v1.0.0.zip",
+    strip_prefix = "streamvbyte-1.0.0",
+    build_file_content = all_content,
+    integrity = "sha256-v0zkAk1Tw0x/NlK6Hd1hlBeehN/dQKMb1v0eXWq1KxA=",
+)
+
+http_archive(
+    name = "rules_foreign_cc",
+    strip_prefix = "rules_foreign_cc-0.10.1",
+    url = "https://github.com/bazelbuild/rules_foreign_cc/archive/refs/tags/0.10.1.tar.gz",
+    sha256 = "476303bd0f1b04cc311fc258f1708a5f6ef82d3091e53fd1977fa20383425a6a",
+)
+
+load("@rules_foreign_cc//foreign_cc:repositories.bzl", "rules_foreign_cc_dependencies")
+rules_foreign_cc_dependencies()
+
+
+http_archive(
+    name="arrow",
+    strip_prefix="arrow-apache-arrow-15.0.2",
+    urls = ["https://github.com/apache/arrow/archive/refs/tags/apache-arrow-15.0.2.zip"],
+    build_file_content = all_content,
+    sha256 = "c0ebc13e9bc428c0c9f617444dcd161140e2bf9a7c65c5ae6bf239e5567175fd",
+    patches = ["//patches:ThirdpartyToolchain.cmake.patch"],
+)
+
+http_archive(
+    name="zstd",
+    strip_prefix="zstd-1.5.6",
+    urls = ["https://github.com/facebook/zstd/archive/refs/tags/v1.5.6.zip"],
+    build_file_content = all_content,
+    integrity = "sha256-Oxw7RuQW02kx79NGYxItf1G1UMh/dN4tOCSVFv59i+U=",
+)
+
+http_archive(
+  name = "pybind11_bazel",
+  strip_prefix = "pybind11_bazel-2.11.1",
+  urls = ["https://github.com/pybind/pybind11_bazel/archive/v2.11.1.zip"],
+  integrity = "sha256-LEZsmzzKeFK0fgeFADEomE/PDV1hoaLkxazu/ZNawiA=",
+)
+# We still require the pybind library.
+http_archive(
+  name = "pybind11",
+  build_file = "@pybind11_bazel//:pybind11.BUILD",
+  strip_prefix = "pybind11-2.11.1",
+  urls = ["https://github.com/pybind/pybind11/archive/v2.11.1.zip"],
+  integrity = "sha256-sBGnMMiEW/wmXw+B7k5enh01TfOQg20qJYgOEj0CH4k=",
+)
+
+load("@pybind11_bazel//:python_configure.bzl", "python_configure")
+python_configure(name = "local_config_python")
+
+http_archive(
+    name="CLI11",
+    strip_prefix="CLI11-2.4.2",
+    urls = ["https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.4.2.zip"],
+    integrity = "sha256-Q+ZQ1eGjrKr0GdHmGoH3e0CNBpb0cr4Fmd34d9QJhLA=",
+)

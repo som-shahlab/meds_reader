@@ -1,0 +1,10 @@
+--- cpp/cmake_modules/ThirdpartyToolchain.cmake
++++ cpp/cmake_modules/ThirdpartyToolchain.cmake
+@@ -4871,6 +4871,6 @@ message(STATUS "All bundled static libraries: ${ARROW_BUNDLED_STATIC_LIBS}")
+
+ # Write out the package configurations.
+
+-configure_file("src/arrow/util/config.h.cmake" "src/arrow/util/config.h" ESCAPE_QUOTES)
++configure_file("src/arrow/util/config.h.cmake" "src/arrow/util/config.h")
+ install(FILES "${ARROW_BINARY_DIR}/src/arrow/util/config.h"
+         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/arrow/util")

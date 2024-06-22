@@ -1,0 +1,6 @@
+build --cxxopt="-std=c++17"
+build --cxxopt="-Wall"
+build --cxxopt="-mavx"
+build --cxxopt="-fvisibility=hidden"
+build --copt="-fvisibility=hidden"
+build --copt="-mavx"

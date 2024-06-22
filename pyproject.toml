@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meds_reader"
+dynamic = ["version"]
+description = ""
+requires-python=">=3.9"
+license = {text = "Apache-2.0"}
+dependencies = [
+  "pyarrow >= 9",
+  "meds>=0.2.0,<0.3",
+]
+
+[tool.setuptools_scm]
+
+
+[project.scripts]
+convert_to_meds_reader = "meds_reader:convert_to_meds_reader"

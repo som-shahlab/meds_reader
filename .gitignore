@@ -1,0 +1,8 @@
+dist
+.vscode
+*.pyc
+native/bazel-*
+*.so
+*egg-info
+docs/source/meds_reader.py
+src/meds_reader/meds_reader_convert
