@@ -10,7 +10,8 @@ Inspired by HuggingFace Datasets, meds_reader transforms MEDS datasets into coll
 
 ```bash
 # First we need to convert to a database
-convert_to_meds_reader mimic_meds mimic_meds_reader
+# That requires running the following command in a terminal
+$ convert_to_meds_reader mimic_meds mimic_meds_reader
 ```
 
 ```python
