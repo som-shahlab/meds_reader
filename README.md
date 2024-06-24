@@ -35,7 +35,7 @@ for patient_id in database:
 ```
 
 
-To learn more, see our the [full documentation](https://meds-reader.readthedocs.io/en/latest/).
+To learn more, see our [full documentation](https://meds-reader.readthedocs.io/en/latest/).
 
 
 ### Installation
