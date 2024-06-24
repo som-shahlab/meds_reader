@@ -13,7 +13,7 @@ class PatientDatabase:
     """
 
     def __init__(self, path_to_database: str) -> None:
-        """Open a PatientDatabase. The path must be from convert_to_patient_database."""
+        """Open a PatientDatabase. The path must be from convert_to_meds_reader."""
         ...
     metadata: meds.DatasetMetadata
     "The MEDS dataset metadata"
