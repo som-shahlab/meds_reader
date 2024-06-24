@@ -5,9 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "meds_reader"
 dynamic = ["version"]
-description = ""
-requires-python=">=3.9"
+description = "A Pythonic interface for MEDS datasets"
+readme = "README.md"
 license = {text = "Apache-2.0"}
+requires-python=">=3.9"
 dependencies = [
   "pyarrow >= 9",
   "meds>=0.2.0,<0.3",
@@ -15,6 +16,11 @@ dependencies = [
 
 [tool.setuptools_scm]
 
+[project.urls]
+Homepage = "https://github.com/EthanSteinberg/meds_reader"
+Documentation = "https://meds-reader.readthedocs.io/en/latest/"
+Repository = "https://github.com/EthanSteinberg/meds_reader"
+Tracker = "https://github.com/EthanSteinberg/meds_reader/issues"
 
 [project.scripts]
 convert_to_meds_reader = "meds_reader:convert_to_meds_reader"
