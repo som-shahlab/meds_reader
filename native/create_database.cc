@@ -953,7 +953,7 @@ void process_string_property(const std::string& property_name,
     // We have to start by reading everything in
 
     std::vector<
-        moodycamel::BlockingConcurrentQueue<std::pair<std::string, size_t>>>
+        moodycamel::BlockingConcurrentQueue<std::pair<std::string, uint64_t>>>
         queues(num_threads);
 
     moodycamel::LightweightSemaphore write_semaphore(QUEUE_SIZE * num_threads);
