@@ -2,7 +2,7 @@ load(
     "@rules_foreign_cc//foreign_cc:defs.bzl", "cmake", "configure_make", "make"
 )
 
-load("@pybind11_bazel//:build_defs.bzl", "pybind_extension")
+load("@pybind11_bazel//:build_defs.bzl", "pybind_extension", "pybind_library")
 
 cc_binary(
     name="simple_test",
@@ -28,6 +28,45 @@ cc_library(
     hdrs=["dtype.hh"],
 )
 
+cc_library(
+    name="fast_shared_ptr",
+    hdrs=["fast_shared_ptr.hh"],
+)
+
+cc_library(
+    name="perfect_hash",
+    hdrs=["perfect_hash.hh"],
+)
+
+pybind_library(
+    name="pyutils",
+    hdrs=["pyutils.hh"],
+)
+
+pybind_library(
+    name="mmap_file",
+    hdrs=["mmap_file.hh"],
+    deps=[
+        "@com_google_absl//absl/types:span",
+    ]
+)
+
+cc_library(
+    name="property_reader",
+    hdrs=["property_reader.hh"],
+    srcs=["property_reader.cc"],
+    deps=[":pyutils", ":dtype", ":zstd", ":streamvbyte", 
+        "@com_google_absl//absl/time", "@com_google_absl//absl/types:span", ":mmap_file"]
+)
+
+cc_binary(
+    name="fast_shared_ptr_test",
+    srcs=["fast_shared_ptr_test.cc"],
+    deps=[
+        ":fast_shared_ptr",
+    ],
+)
+
 cc_binary(
     name="meds_reader_convert",
     srcs=["meds_reader_convert.cc"],
@@ -45,12 +84,15 @@ pybind_extension(
     linkopts = select({
         "@platforms//os:osx": ["-undefined", "dynamic_lookup"],
         "//conditions:default": [],
-    }),    
+    }),
+    # copts = ["-fno-inline"],
     deps=[
         "@com_google_absl//absl/container:flat_hash_map",
-        ":zstd",
-        ":streamvbyte",
+        ":pyutils",
+        ":perfect_hash",
         ":dtype",
+        ":property_reader",
+        ":fast_shared_ptr",
     ],
 )
 

@@ -32,17 +32,23 @@ def patient_database(tmpdir: str):
                 {
                     "time": datetime.datetime(2012, 10, 2),
                     "code": "Whatever",
-                    "properties": {"other": "need"},
+                    "properties": {"other": "need", "numeric": 38},
                 },
                 {
                     "time": datetime.datetime(2013, 10, 2),
+                    "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
                     "code": "Whatever2",
                 },
             ],
         }
     ]
 
-    custom_properties = pa.struct([("other", pa.string())])
+    custom_properties = pa.struct(
+        [
+            ("other", pa.string()),
+            ("numeric", pa.float32()),
+        ]
+    )
 
     table = pa.Table.from_pylist(
         entries, schema=meds.schema.patient_schema(custom_properties)
@@ -84,6 +90,7 @@ def test_properties(patient_database):
         "other": pa.string(),
         "text_value": pa.string(),
         "time": pa.timestamp("us"),
+        "numeric": pa.float32(),
     }
 
 
@@ -110,3 +117,9 @@ def test_lookup(patient_database):
 
     assert p.events[0].other == "need"
     assert p.events[1].other is None
+
+    assert p.events[0].numeric == 38
+    assert p.events[1].numeric is None
+
+    assert p.events[0].datetime_value is None
+    assert p.events[1].datetime_value == datetime.datetime(1999, 4, 2, 2, 4, 29, 999999)

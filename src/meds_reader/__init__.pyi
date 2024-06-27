@@ -30,7 +30,7 @@ class PatientDatabase:
         ...
 
     def __iter__(self) -> Iterator[int]:
-        """Get all patient ids in the Database"""
+        """Get all patient ids in the database"""
         ...
 
 class Patient:

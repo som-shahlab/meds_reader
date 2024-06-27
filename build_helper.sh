@@ -1,7 +1,7 @@
 #!/bin/sh
 
 cd native
-bazel build _meds_reader.so meds_reader_convert
+bazel build -c opt _meds_reader.so meds_reader_convert
 cd ..
 
 rm -f src/meds_reader/_meds_reader* src/meds_reader/meds_reader_convert*
