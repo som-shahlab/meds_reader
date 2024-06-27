@@ -15,8 +15,23 @@ class MmapFile {
     template <typename P>
     MmapFile(const P& path) {
         fp = open(path.c_str(), O_RDONLY);
+        if (fp == -1) {
+            throw std::runtime_error(
+                std::string("Could not open the following path ") +
+                std::string(path) + " " + std::string(strerror(errno)));
+        }
         data_size = std::filesystem::file_size(path);
-        data_pointer = mmap(nullptr, data_size, PROT_READ, MAP_PRIVATE, fp, 0);
+        if (data_size != 0) {
+            data_pointer =
+                mmap(nullptr, data_size, PROT_READ, MAP_PRIVATE, fp, 0);
+            if (data_pointer == MAP_FAILED) {
+                throw std::runtime_error(
+                    std::string("Could not mmap the requested file ") +
+                    std::string(path) + " " + std::string(strerror(errno)));
+            }
+        } else {
+            data_pointer = nullptr;
+        }
     }
 
     std::string_view bytes() const {

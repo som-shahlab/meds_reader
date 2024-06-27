@@ -38,9 +38,11 @@ for patient_id in database:
         print(event.time, event.code)
 ```
 
+<!-- Start OnlyGithub -->
 
 To learn more, see our [full documentation](https://meds-reader.readthedocs.io/en/latest/).
 
+<!-- End OnlyGithub -->
 
 ### Installation
 

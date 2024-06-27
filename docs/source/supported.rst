@@ -15,9 +15,9 @@ We plan on adding support for Windows x86_64 in the future.
 Data Types
 -----------
 
-MEDS is a very flexible format in that Events can have arbitrary custom properties of arbitrary pyarrow types.
+MEDS is a very flexible format in that Events can have custom properties of any pyarrow type.
 
-However, meds_reader currently only supports some pyarrow types. The supported types are listed below:
+However, meds_reader currently only supports some pyarrow types.
 
 
 .. role:: python(code)
@@ -32,4 +32,4 @@ The following types are currently supported:
    - :python:`pyarrow.*int*()`
 
 
-If you need additional types, please create an issue on Github.
+If you need support for additional types, please create an issue on GitHub.
