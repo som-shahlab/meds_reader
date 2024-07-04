@@ -40,7 +40,27 @@ def patient_database(tmpdir: str):
                     "code": "Whatever2",
                 },
             ],
-        }
+        },
+        {
+            "patient_id": 64,
+            "events": [
+                {
+                    "time": datetime.datetime(2012, 10, 2),
+                    "code": "Whatever",
+                    "properties": {"other": "need", "numeric": 38},
+                },
+                {
+                    "time": datetime.datetime(2013, 10, 2),
+                    "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
+                    "code": "Whatever2",
+                },
+                {
+                    "time": datetime.datetime(2013, 10, 2),
+                    "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
+                    "code": "Whatever3",
+                },
+            ],
+        },
     ]
 
     custom_properties = pa.struct(
@@ -69,7 +89,7 @@ def test_metadata(patient_database):
 
 
 def test_size(patient_database):
-    assert len(patient_database) == 1
+    assert len(patient_database) == 2
 
 
 def test_missing(patient_database):
@@ -78,7 +98,7 @@ def test_missing(patient_database):
 
 
 def test_iter(patient_database):
-    assert list(patient_database) == [32]
+    assert list(patient_database) == [32, 64]
 
 
 def test_properties(patient_database):
@@ -103,6 +123,37 @@ def test_missing_property(patient_database):
 
 
 def test_lookup(patient_database):
+    p = patient_database[32]
+
+    assert p.patient_id == 32
+
+    assert len(p.events) == 2
+
+    assert p.events[0].code == "Whatever"
+    assert p.events[1].code == "Whatever2"
+
+    assert p.events[0].time == datetime.datetime(2012, 10, 2)
+    assert p.events[1].time == datetime.datetime(2013, 10, 2)
+
+    assert p.events[0].other == "need"
+    assert p.events[1].other is None
+
+    assert p.events[0].numeric == 38
+    assert p.events[1].numeric is None
+
+    assert p.events[0].datetime_value is None
+    assert p.events[1].datetime_value == datetime.datetime(1999, 4, 2, 2, 4, 29, 999999)
+
+
+def test_filter(patient_database):
+    with pytest.raises(ValueError):
+        sub_database = patient_database.filter([32, 45345])
+
+    sub_database = patient_database.filter([32])
+
+    assert len(sub_database) == 1
+    assert list(sub_database) == [32]
+
     p = patient_database[32]
 
     assert p.patient_id == 32

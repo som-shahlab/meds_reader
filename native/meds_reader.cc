@@ -65,11 +65,6 @@ struct PatientDatabase : public PyObject,
     PyObjectWrapper py_metadata;
 };
 
-PyMethodDef PatientDatabaseMethods[] = {
-    {"__reduce__", convert_to_cfunc<&PatientDatabase::reduce>(), METH_NOARGS,
-     "Save the patient database"},
-    {nullptr}};
-
 PyMappingMethods PatientDatabaseMappingMethods = {
     .mp_length = convert_to_cfunc<&PatientDatabase::length>(),
     .mp_subscript = convert_to_cfunc<&PatientDatabase::subscript>(),
@@ -94,7 +89,6 @@ PyTypeObject PatientDatabase::Type = {
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_doc = PyDoc_STR("Patient Database"),
     .tp_iter = convert_to_cfunc<&PatientDatabase::iter>(),
-    .tp_methods = PatientDatabaseMethods,
     .tp_getset = PatientDatabaseGetSet,
     .tp_init = nullptr,
     .tp_alloc = nullptr,
@@ -130,6 +124,7 @@ struct Patient : public PyObject, fast_shared_ptr_object<Patient> {
     //-----------------------------------------
 
     void operator delete(void* ptr) { free(ptr); }
+    ~Patient();
 
    private:
     friend Event;
@@ -285,6 +280,26 @@ Patient::Patient(const fast_shared_ptr<PatientDatabase>& pd, int32_t po,
     }
 }
 
+Patient::~Patient() {
+    if (events_obj.ref != nullptr) {
+        std::cerr << "Patient dies before the events object dies?" << std::endl;
+        std::terminate();
+    }
+
+    for (size_t i = 0; i < patient_database->get_num_properties(); i++) {
+        saved_properties[i].~vector<PyObjectWrapper>();
+    }
+
+    for (int32_t i = 0; i < patient_length; i++) {
+        if (events[i].patient.get() != nullptr) {
+            std::cerr << "Patient dies before a child event object dies?"
+                      << std::endl;
+            std::terminate();
+        }
+        events[i].~Event();
+    }
+}
+
 PyObject* Patient::get_property(PyObject* property_name, Event* event_ptr) {
     size_t event_index = event_ptr - events;
     // Needs to get the property
@@ -346,7 +361,7 @@ void Patient::dealloc() {
 PyObject* Patient::str() {
     static_assert(sizeof(int64_t) == sizeof(long));
     int64_t patient_id_val = PyLong_AsLong(patient_id.borrow());
-    size_t num_events = PyTuple_GET_SIZE(events);
+    size_t num_events = PyTuple_GET_SIZE(events_obj.borrow());
 
     std::string debug_string =
         absl::StrCat("Patient(patient_id=", patient_id_val,
@@ -371,9 +386,11 @@ Event::Event(const fast_shared_ptr<Patient>& pd) : patient(pd) {
 void Event::dealloc() { patient.reset(); }
 
 inline PyObject* Event::getattro(PyObject* key) {
-    PyUnicode_InternInPlace(&key);
+    Py_INCREF(key);
+    PyObjectWrapper key_wrapper(key);
+    PyUnicode_InternInPlace(&key_wrapper.ref);
 
-    return patient->get_property(key, this);
+    return patient->get_property(key_wrapper.borrow(), this);
 }
 
 PyObject* Event::str() {
@@ -491,6 +508,12 @@ std::optional<int32_t> PatientDatabase::get_patient_offset(int64_t patient_id) {
     if (!patient_offset_map) {
         patient_offset_map.emplace();
         for (int i = 0; i < num_patients; i++) {
+            if (patient_offset_map->find(get_patient_id(i)) !=
+                std::end(*patient_offset_map)) {
+                throw std::runtime_error("Cannot make this work! " +
+                                         std::to_string(i) + " " +
+                                         std::to_string(get_patient_id(i)));
+            }
             patient_offset_map->insert(std::make_pair(get_patient_id(i), i));
         }
     }
@@ -573,26 +596,6 @@ inline PyObject* PatientDatabase::subscript(PyObject* patient_id) {
     }
 
     return Patient::create(shared_from_this(), *patient_offset, patient_id);
-}
-
-PyObject* PatientDatabase::reduce(PyObject* Py_UNUSED(unused)) {
-    std::string path = root_directory.string();
-
-    PyObject* path_string =
-        PyUnicode_FromStringAndSize(path.data(), path.size());
-
-    if (path_string == nullptr) {
-        return PyErr_Format(
-            PyExc_RuntimeError,
-            "Could not convert the database path to a string ...");
-    }
-
-    PyObject* args = PyTuple_Pack(1, path_string);
-
-    Py_INCREF(ob_type);
-    PyObject* result = PyTuple_Pack(2, ob_type, args);
-
-    return result;
 }
 
 PyObject* PatientDatabase::str() {

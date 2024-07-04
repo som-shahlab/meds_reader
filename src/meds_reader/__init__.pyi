@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import Mapping, Iterator, Sequence, Collection
-from typing import Any, Optional
+from typing import Mapping, Iterator, Sequence, Collection, List, Callable
+from typing import Any, Optional, TypeVar
 import meds
 import datetime
 import pyarrow as pa
+
+A = TypeVar("A")
 
 class PatientDatabase:
     """A PatientDatabase is a read-only mapping from patient_id to Patient objects.
@@ -12,7 +14,7 @@ class PatientDatabase:
     It also stores metadata such as meds.DatasetMetadat and the custom per-event properties.
     """
 
-    def __init__(self, path_to_database: str) -> None:
+    def __init__(self, path_to_database: str, num_threads: int = 1) -> None:
         """Open a PatientDatabase. The path must be from convert_to_meds_reader."""
         ...
     metadata: meds.DatasetMetadata
@@ -31,6 +33,17 @@ class PatientDatabase:
 
     def __iter__(self) -> Iterator[int]:
         """Get all patient ids in the database"""
+        ...
+
+    def filter(self, patient_ids: List[int]) -> PatientDatabase:
+        """Filter the database to a list of patients"""
+        ...
+
+    def map(self, map_func: Callable[[Iterator[Patient]], A]) -> Iterator[A]:
+        """Apply a function to every patient in the database, in a multi-threaded manner.
+
+        map_func is a callable that takes an iterable of patients.
+        """
         ...
 
 class Patient:

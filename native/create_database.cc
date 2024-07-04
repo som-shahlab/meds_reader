@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/types/optional.h"
 #include "arrow/array/array_binary.h"
 #include "arrow/array/array_primitive.h"
@@ -1742,10 +1743,19 @@ void process_patient_id_and_time(std::filesystem::path temp_path,
             (temp_path / "time"),
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 
+        absl::flat_hash_set<int64_t> seen_patient_ids;
+
         for (const auto& entry : work_entries) {
             const auto& item = all_lengths[std::get<3>(entry)];
             pids_file.write((const char*)std::get<1>(item).data(),
                             sizeof(int64_t) * std::get<1>(item).size());
+            for (int64_t pid : std::get<1>(item)) {
+                if (seen_patient_ids.count(pid) != 0) {
+                    throw std::runtime_error("Had duplicate patient ids " +
+                                             std::to_string(pid));
+                }
+                seen_patient_ids.insert(pid);
+            }
             lengths_file.write((const char*)std::get<2>(item).data(),
                                sizeof(uint32_t) * std::get<2>(item).size());
 
