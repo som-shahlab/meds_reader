@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Mapping, Iterator, Sequence, Collection, List, Callable
+from typing import Mapping, Iterator, Sequence, Collection, List, Callable, Tuple
 from typing import Any, Optional, TypeVar
 import meds
 import datetime
@@ -17,6 +17,9 @@ class PatientDatabase:
     def __init__(self, path_to_database: str, num_threads: int = 1) -> None:
         """Open a PatientDatabase. The path must be from convert_to_meds_reader."""
         ...
+    path_to_database: str
+    "The path to the database object"
+
     metadata: meds.DatasetMetadata
     "The MEDS dataset metadata"
 
@@ -45,6 +48,9 @@ class PatientDatabase:
         map_func is a callable that takes an iterable of patients.
         """
         ...
+
+    def __enter__(self) -> PatientDatabase: ...
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None: ...
 
 class Patient:
     """A patient consists of a patient_id and a sequence of Events"""

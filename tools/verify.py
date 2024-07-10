@@ -10,8 +10,8 @@ import random
 
 random.seed(34234)
 
-database = meds_reader.PatientDatabase("../mimic-iv-meds-reader")
-reference = pq.ParquetFile("../mimic-iv-meds/data/0.parquet")
+database = meds_reader.PatientDatabase("../mimic-iv-meds2-reader")
+reference = pq.ParquetFile("../mimic-iv-meds2/data/0.parquet")
 
 row_group = reference.read_row_group(random.randint(0, reference.num_row_groups - 1))
 

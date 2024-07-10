@@ -24,4 +24,4 @@ Repository = "https://github.com/EthanSteinberg/meds_reader"
 Tracker = "https://github.com/EthanSteinberg/meds_reader/issues"
 
 [project.scripts]
-convert_to_meds_reader = "meds_reader:convert_to_meds_reader"
+meds_reader_convert = "meds_reader:meds_reader_convert"

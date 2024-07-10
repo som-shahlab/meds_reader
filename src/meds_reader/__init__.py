@@ -1,14 +1,29 @@
 from __future__ import annotations
 
 import importlib.resources
+from multiprocessing.context import SpawnProcess
+import multiprocessing.spawn
 import os
 import sys
 import multiprocessing
 import numpy as np
 import pickle
 import warnings
+import pyarrow.parquet as pq
+import pyarrow as pa
 
-from typing import Optional, Tuple, Any, Sequence, TypeVar, Callable, Iterator, cast
+from typing import (
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    Any,
+    Sequence,
+    TypeVar,
+    Callable,
+    Iterator,
+    cast,
+)
 
 from . import _meds_reader
 
@@ -18,8 +33,10 @@ A = TypeVar("A")
 
 WorkEntry = Tuple[bytes, np.ndarray]
 
+mp = multiprocessing.get_context("spawn")
 
-def convert_to_meds_reader():
+
+def meds_reader_convert():
     submodules = importlib.resources.files("meds_reader")
     for module in submodules.iterdir():
         if module.name.startswith("meds_reader_convert"):
@@ -29,8 +46,8 @@ def convert_to_meds_reader():
 
 def _runner(
     path_to_database: str,
-    input_queue: multiprocessing.Queue[Optional[WorkEntry]],
-    result_queue: multiprocessing.Queue[Any],
+    input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]],
+    result_queue: multiprocessing.SimpleQueue[Any],
 ) -> None:
     database = _meds_reader.PatientDatabase(path_to_database)
     while True:
@@ -105,16 +122,18 @@ class _PatientDatabaseWrapper:
 
 class PatientDatabase:
     def __init__(self, path_to_database: str, num_threads: int = 1) -> None:
+        self.path_to_database = path_to_database
         self._database = _meds_reader.PatientDatabase(path_to_database)
         self._all_patient_ids: np.ndarray = np.array(list(self._database))
         self._num_threads = num_threads
 
         if num_threads != 1:
-            self._processes = []
-            mp = multiprocessing.get_context("spawn")
+            self._processes: Optional[List[SpawnProcess]] = []
 
-            self._input_queue: multiprocessing.Queue[Optional[WorkEntry]] = mp.Queue()
-            self._result_queue: multiprocessing.Queue[Any] = mp.Queue()
+            self._input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]] = (
+                mp.SimpleQueue()
+            )
+            self._result_queue: multiprocessing.SimpleQueue[Any] = mp.SimpleQueue()
 
             for _ in range(num_threads):
                 process = mp.Process(
@@ -196,6 +215,8 @@ class PatientDatabase:
                 self._input_queue.put(None)
             for process in self._processes:
                 process.join()
+            self._input_queue.close()
+            self._result_queue.close()
             self._processes = None
 
     def __del__(self):
@@ -213,5 +234,6 @@ class PatientDatabase:
 
 Patient = _meds_reader.Patient
 Event = _meds_reader.Event
+
 
 __all__ = ["PatientDatabase", "Patient", "Event"]

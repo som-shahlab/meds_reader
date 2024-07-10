@@ -6,6 +6,7 @@ import subprocess
 import json
 import datetime
 import meds
+import meds_reader.transform
 import pytest
 
 
@@ -13,9 +14,8 @@ metadata = {"dataset_name": "Testing Dataset!"}
 
 
 @pytest.fixture
-def patient_database(tmpdir: str):
+def meds_dataset(tmpdir: str):
     meds_dir = os.path.join(tmpdir, "meds")
-    meds_reader_dir = os.path.join(tmpdir, "meds_reader")
 
     os.mkdir(meds_dir)
 
@@ -75,9 +75,16 @@ def patient_database(tmpdir: str):
     )
 
     pq.write_table(table, os.path.join(data_dir, "entries.parquet"))
+    return os.path.join(tmpdir, "meds")
+
+
+@pytest.fixture
+def patient_database(tmpdir: str, meds_dataset: str):
+
+    meds_reader_dir = os.path.join(tmpdir, "meds_reader")
 
     subprocess.run(
-        ["convert_to_meds_reader", meds_dir, meds_reader_dir, "--num_threads", "4"],
+        ["meds_reader_convert", meds_dataset, meds_reader_dir, "--num_threads", "4"],
         check=True,
     )
 
@@ -174,3 +181,32 @@ def test_filter(patient_database):
 
     assert p.events[0].datetime_value is None
     assert p.events[1].datetime_value == datetime.datetime(1999, 4, 2, 2, 4, 29, 999999)
+
+
+def _example_transform(
+    patient: meds_reader.transform.MutablePatient,
+) -> meds_reader.transform.MutablePatient:
+    patient.patient_id *= 10
+    print(patient)
+    return patient
+
+
+def test_transform(tmpdir: str, meds_dataset: str):
+
+    target = os.path.join(tmpdir, "modified_meds")
+    meds_reader_dir = os.path.join(tmpdir, "modified_meds_reader")
+
+    meds_reader.transform.transform_meds_dataset(
+        meds_dataset, target, _example_transform, 2
+    )
+
+    subprocess.run(
+        ["meds_reader_convert", target, meds_reader_dir, "--num_threads", "4"],
+        check=True,
+    )
+
+    database = meds_reader.PatientDatabase(str(meds_reader_dir))
+
+    assert len(database) == 2
+
+    assert list(database) == [32 * 10, 64 * 10]
