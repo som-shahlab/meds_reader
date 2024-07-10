@@ -4,7 +4,7 @@ API Reference
 Command Line Program
 -------------------------------
 
-.. py:attribute:: convert_to_meds_reader [source_meds_path] [destination_path] --num_threads
+.. py:attribute:: meds_reader_convert [source_meds_path] [destination_path] --num_threads
 
     Convert a MEDS dataset to a meds_reader PatientDatabase.
 
