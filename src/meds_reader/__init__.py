@@ -11,6 +11,8 @@ import pickle
 import warnings
 import pyarrow.parquet as pq
 import pyarrow as pa
+import argparse
+import random
 
 from typing import (
     List,
@@ -34,6 +36,87 @@ A = TypeVar("A")
 WorkEntry = Tuple[bytes, np.ndarray]
 
 mp = multiprocessing.get_context("spawn")
+
+
+def meds_reader_verify():
+    parser = argparse.ArgumentParser(
+        description="Verify that a meds_reader dataset matches a source dataset"
+    )
+    parser.add_argument(
+        "meds_dataset", type=str, help="A MEDS dataset to compare against"
+    )
+    parser.add_argument(
+        "meds_reader_database", type=str, help="A meds_reader database to verify"
+    )
+
+    args = parser.parse_args()
+
+    database = PatientDatabase(args.meds_reader_database)
+
+    random.seed(3452342)
+
+    files = sorted(os.listdir(os.path.join(args.meds_dataset, "data")))
+
+    file = random.choice(files)
+    reference = pq.ParquetFile(os.path.join(args.meds_dataset, "data", file))
+
+    row_group = reference.read_row_group(
+        random.randint(0, reference.num_row_groups - 1)
+    )
+
+    events = row_group.schema.field("events").type.value_type
+    properties = events.field("properties").type
+
+    all_properties = {}
+
+    for i in range(events.num_fields):
+        f = events.field(i)
+        all_properties[f.name] = f.type
+
+    for i in range(properties.num_fields):
+        f = properties.field(i)
+        all_properties[f.name] = f.type
+
+    del all_properties["properties"]
+
+    missing = set(all_properties) - set(database.properties)
+    extra = set(database.properties) - set(all_properties)
+
+    assert len(missing) == 0, f"Had missing properties {missing}"
+    assert len(extra) == 0, f"Had extra properties {extra}"
+
+    assert all_properties == database.properties
+
+    num_patients = row_group.shape[0]
+
+    random_indices = random.sample(list(range(num_patients)), min([num_patients, 200]))
+
+    row_group_sample = row_group.take(random_indices)
+
+    python_objects = row_group_sample.to_pylist()
+
+    def assert_same(pyarrow_patient, reader_patient):
+        assert pyarrow_patient["patient_id"] == reader_patient.patient_id
+
+        assert len(pyarrow_patient["events"]) == len(reader_patient.events)
+
+        for pyarrow_event, reader_event in zip(
+            pyarrow_patient["events"], reader_patient.events
+        ):
+            for property in database.properties:
+                if property in pyarrow_event:
+                    assert pyarrow_event[property] == getattr(reader_event, property)
+                else:
+                    assert pyarrow_event["properties"][property] == getattr(
+                        reader_event, property
+                    )
+
+    for pyarrow_patient in python_objects:
+        reader_patient = database[pyarrow_patient["patient_id"]]
+
+        assert_same(pyarrow_patient, reader_patient)
+
+    print("Test passed!")
 
 
 def meds_reader_convert():
@@ -123,12 +206,13 @@ class _PatientDatabaseWrapper:
 class PatientDatabase:
     def __init__(self, path_to_database: str, num_threads: int = 1) -> None:
         self.path_to_database = path_to_database
+        self._num_threads = 1
         self._database = _meds_reader.PatientDatabase(path_to_database)
         self._all_patient_ids: np.ndarray = np.array(list(self._database))
-        self._num_threads = num_threads
 
         if num_threads != 1:
             self._processes: Optional[List[SpawnProcess]] = []
+            self._num_threads = 1
 
             self._input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]] = (
                 mp.SimpleQueue()

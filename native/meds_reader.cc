@@ -92,7 +92,7 @@ PyTypeObject PatientDatabase::Type = {
     .tp_getset = PatientDatabaseGetSet,
     .tp_init = nullptr,
     .tp_alloc = nullptr,
-    .tp_new = PatientDatabase::create,
+    .tp_new = convert_to_cfunc<&PatientDatabase::create>(),
     .tp_free = nullptr,
 };
 

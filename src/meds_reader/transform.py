@@ -32,6 +32,9 @@ class MutablePatient:
     events: List[MutableEvent]
     "Items that have happened to a patient"
 
+    def __eq__(self, other: MutablePatient) -> bool:
+        return (self.patient_id, self.events) == (other.patient_id, other.events)
+
 
 class MutableEvent:
     """An event represents a single unit of information about a patient. It contains a time and code, and potentially more properties."""
@@ -39,12 +42,13 @@ class MutableEvent:
     def __init__(
         self, time: datetime.datetime, code: str, properties: Dict[str, Any] = {}
     ):
-        super().__setattr__("time", time)
         if properties == {}:
             properties = {}
 
         super().__setattr__("properties", properties)
-        self.code = code
+
+        properties["code"] = code
+        properties["time"] = time
 
     time: datetime.datetime
     "The time the event occurred"
@@ -62,6 +66,9 @@ class MutableEvent:
     def __iter__(self) -> Iterator[Tuple[str, Any]]:
         """Iterate over all non-None properties within this event."""
         yield from self.properties.items()
+
+    def __eq__(self, other: MutableEvent) -> bool:
+        return self.properties == other.properties
 
 
 def _convert_dict_to_patient(patient_dict: Mapping[str, Any]) -> MutablePatient:

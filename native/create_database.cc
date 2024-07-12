@@ -569,19 +569,19 @@ std::vector<std::vector<char>> get_samples(
     return samples;
 }
 
-std::pair<size_t, std::vector<uint32_t>> write_files(
+std::pair<size_t, std::vector<uint64_t>> write_files(
     std::filesystem::path filename, int64_t start_row_group,
     int64_t end_row_group, std::string property_name,
     const absl::flat_hash_map<std::string, size_t>& dictionary_entries,
     const std::vector<char>& dictionary,
     std::filesystem::path target_filename) {
-    std::vector<uint32_t> offsets;
+    std::vector<uint64_t> offsets;
 
     std::ofstream output_file(target_filename, std::ios_base::out |
                                                    std::ios_base::binary |
                                                    std::ios_base::trunc);
 
-    size_t num_bytes = 0;
+    uint64_t num_bytes = 0;
 
     auto context_deleter = [](ZSTD_CCtx* context) { ZSTD_freeCCtx(context); };
 
@@ -893,8 +893,6 @@ std::vector<std::pair<uint64_t, std::string>> merger_thread(
         }
     }
 
-    std::filesystem::remove_all(folder_to_merge);
-
     flush();
 
     return entries;
@@ -999,6 +997,7 @@ void process_string_property(const std::string& property_name,
                 std::filesystem::path writer_path =
                     string_path / std::to_string(i);
                 all_entries[i] = merger_thread(writer_path);
+                std::filesystem::remove_all(writer_path);
             });
         }
 
@@ -1080,7 +1079,7 @@ void process_string_property(const std::string& property_name,
         zdict.write(dictionary.data(), dictionary.size());
     }
 
-    std::vector<std::pair<size_t, std::vector<uint32_t>>> all_lengths(
+    std::vector<std::pair<size_t, std::vector<uint64_t>>> all_lengths(
         work_entries.size());
 
     run_all(work_entries, num_threads,
@@ -1100,7 +1099,7 @@ void process_string_property(const std::string& property_name,
         num_patients += length.second.size();
     }
 
-    size_t current_offset = (num_patients + 1) * sizeof(uint32_t);
+    uint64_t current_offset = (num_patients + 1) * sizeof(uint64_t);
 
     for (auto& length : all_lengths) {
         size_t temp = length.first;
@@ -1127,7 +1126,7 @@ void process_string_property(const std::string& property_name,
 
     for (const auto& entry : work_entries) {
         auto& item = all_lengths[std::get<3>(entry)];
-        ssize_t num_to_write = item.second.size() * sizeof(int32_t);
+        ssize_t num_to_write = item.second.size() * sizeof(uint64_t);
         const char* buffer = (const char*)item.second.data();
         data_file.write(buffer, num_to_write);
     }
@@ -1308,18 +1307,18 @@ std::vector<std::vector<char>> get_primitive_samples(
     return samples;
 }
 
-std::pair<size_t, std::vector<uint32_t>> write_primitive_files(
+std::pair<size_t, std::vector<uint64_t>> write_primitive_files(
     std::filesystem::path filename, int64_t start_row_group,
     int64_t end_row_group, std::string property_name,
     const std::vector<char>& dictionary,
     std::filesystem::path target_filename) {
-    std::vector<uint32_t> offsets;
+    std::vector<uint64_t> offsets;
 
     std::ofstream output_file(target_filename, std::ios_base::out |
                                                    std::ios_base::binary |
                                                    std::ios_base::trunc);
 
-    size_t num_bytes = 0;
+    uint64_t num_bytes = 0;
 
     auto context_deleter = [](ZSTD_CCtx* context) { ZSTD_freeCCtx(context); };
 
@@ -1422,7 +1421,7 @@ void process_primitive_property(const std::string& property_name,
         zdict.write(dictionary.data(), dictionary.size());
     }
 
-    std::vector<std::pair<size_t, std::vector<uint32_t>>> all_lengths(
+    std::vector<std::pair<size_t, std::vector<uint64_t>>> all_lengths(
         work_entries.size());
 
     run_all(work_entries, num_threads,
@@ -1436,13 +1435,13 @@ void process_primitive_property(const std::string& property_name,
                     target_path);
             });
 
-    size_t num_patients = 0;
+    uint64_t num_patients = 0;
 
     for (const auto& length : all_lengths) {
         num_patients += length.second.size();
     }
 
-    size_t current_offset = (num_patients + 1) * sizeof(uint32_t);
+    uint64_t current_offset = (num_patients + 1) * sizeof(uint64_t);
 
     for (auto& length : all_lengths) {
         size_t temp = length.first;
@@ -1469,7 +1468,7 @@ void process_primitive_property(const std::string& property_name,
 
     for (const auto& entry : work_entries) {
         auto& item = all_lengths[std::get<3>(entry)];
-        ssize_t num_to_write = item.second.size() * sizeof(int32_t);
+        ssize_t num_to_write = item.second.size() * sizeof(uint64_t);
         const char* buffer = (const char*)item.second.data();
         data_file.write(buffer, num_to_write);
     }
@@ -1488,7 +1487,7 @@ void process_primitive_property(const std::string& property_name,
 }
 
 std::tuple<uint32_t, std::vector<int64_t>, std::vector<uint32_t>,
-           std::vector<uint32_t>>
+           std::vector<uint64_t>>
 get_patient_ids(std::filesystem::path filename, int64_t start_row_group,
                 int64_t end_row_group, std::filesystem::path target_path) {
     std::ofstream output_file(target_path, std::ios_base::out |
@@ -1523,9 +1522,9 @@ get_patient_ids(std::filesystem::path filename, int64_t start_row_group,
 
     std::vector<int64_t> patient_ids;
     std::vector<uint32_t> lengths;
-    std::vector<uint32_t> offsets;
+    std::vector<uint64_t> offsets;
 
-    size_t num_bytes = 0;
+    uint64_t num_bytes = 0;
 
     for (int64_t row_group = start_row_group; row_group < end_row_group;
          row_group++) {
@@ -1595,14 +1594,25 @@ get_patient_ids(std::filesystem::path filename, int64_t start_row_group,
                     throw std::runtime_error("Missing events?");
                 }
 
+                if (events->value_length(i) == 0) {
+                    throw std::runtime_error("Zero events for patient?");
+                }
+
+                int64_t starting_index = events->value_offset(i);
+                if (time_array->IsNull(starting_index)) {
+                    throw std::runtime_error("First time is not valid?");
+                }
+
                 constexpr int64_t micros_per_second = ((int64_t)1000) * 1000;
                 constexpr int64_t micros_per_day =
                     micros_per_second * 24 * 60 * 60;
 
-                int64_t last_timestamp = 0;
+                int64_t starting_timestamp = time_array->Value(starting_index);
 
-                int64_t current_timestamp = 0;
-                int64_t current_timestamp_count = 0;
+                int64_t last_timestamp = starting_timestamp;
+
+                int64_t current_timestamp = starting_timestamp;
+                int64_t current_timestamp_count = 1;
 
                 std::vector<uint32_t> values;
 
@@ -1641,16 +1651,15 @@ get_patient_ids(std::filesystem::path filename, int64_t start_row_group,
                     }
                 };
 
-                for (int64_t j = events->value_offset(i);
-                     j < events->value_offset(i) + events->value_length(i);
-                     j++) {
+                for (int64_t j = starting_index + 1;
+                     j < starting_index + events->value_length(i); j++) {
                     if (event->IsNull(j) || time_array->IsNull(j)) {
                         throw std::runtime_error("Null time");
                     }
 
                     auto val = time_array->Value(j);
 
-                    if (val == last_timestamp) {
+                    if (val == current_timestamp) {
                         current_timestamp_count++;
                     } else {
                         flush_timestamp();
@@ -1662,16 +1671,21 @@ get_patient_ids(std::filesystem::path filename, int64_t start_row_group,
                 flush_timestamp();
 
                 std::vector<char> helper(
-                    sizeof(uint32_t) +
+                    sizeof(int64_t) + sizeof(uint32_t) +
                     streamvbyte_max_compressedbytes(values.size()));
                 size_t count = streamvbyte_encode_0124(
                     values.data(), values.size(),
-                    (uint8_t*)helper.data() + sizeof(uint32_t));
+                    (uint8_t*)helper.data() + sizeof(uint32_t) +
+                        sizeof(int64_t));
 
-                uint32_t* length_pointer = (uint32_t*)helper.data();
+                int64_t* start_pointer = (int64_t*)(helper.data());
+                *start_pointer = starting_timestamp;
+
+                uint32_t* length_pointer =
+                    (uint32_t*)(helper.data() + sizeof(int64_t));
                 *length_pointer = values.size();
 
-                helper.resize(sizeof(uint32_t) + count);
+                helper.resize(sizeof(int64_t) + sizeof(uint32_t) + count);
 
                 offsets.push_back(num_bytes);
                 lengths.push_back(events->value_length(i));
@@ -1691,7 +1705,7 @@ void process_patient_id_and_time(std::filesystem::path temp_path,
                                  const std::vector<WorkEntry>& work_entries,
                                  int num_threads) {
     std::vector<std::tuple<uint32_t, std::vector<int64_t>,
-                           std::vector<uint32_t>, std::vector<uint32_t>>>
+                           std::vector<uint32_t>, std::vector<uint64_t>>>
         all_lengths(work_entries.size());
 
     run_all(
@@ -1710,7 +1724,7 @@ void process_patient_id_and_time(std::filesystem::path temp_path,
         num_patients += std::get<1>(length).size();
     }
 
-    size_t current_offset = (num_patients + 1) * sizeof(uint32_t);
+    uint64_t current_offset = (num_patients + 1) * sizeof(uint64_t);
 
     for (auto& length : all_lengths) {
         size_t temp = std::get<0>(length);
@@ -1759,7 +1773,7 @@ void process_patient_id_and_time(std::filesystem::path temp_path,
             lengths_file.write((const char*)std::get<2>(item).data(),
                                sizeof(uint32_t) * std::get<2>(item).size());
 
-            ssize_t num_to_write = std::get<3>(item).size() * sizeof(int32_t);
+            ssize_t num_to_write = std::get<3>(item).size() * sizeof(uint64_t);
             const char* buffer = (const char*)std::get<3>(item).data();
 
             data_file.write(buffer, num_to_write);

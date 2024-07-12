@@ -175,9 +175,9 @@ struct StringPropertyReader : PropertyReader {
 
     std::vector<PyObjectWrapper> get_property_data(int32_t patient_offset,
                                                    int32_t length) {
-        uint32_t offset = data_file.data<uint32_t>()[patient_offset];
-        uint32_t num_bytes =
-            data_file.data<uint32_t>()[patient_offset + 1] - offset;
+        uint64_t offset = data_file.data<uint64_t>()[patient_offset];
+        uint64_t num_bytes =
+            data_file.data<uint64_t>()[patient_offset + 1] - offset;
 
         uint32_t* length_pointer =
             (uint32_t*)(data_file.bytes().data() + offset);
@@ -296,24 +296,27 @@ struct TimePropertyReader : PropertyReader {
 
     std::vector<PyObjectWrapper> get_property_data(int32_t patient_offset,
                                                    int32_t length) {
-        uint32_t offset = data_file.data<uint32_t>()[patient_offset];
-        uint32_t num_bytes =
-            data_file.data<uint32_t>()[patient_offset + 1] - offset;
+        uint64_t offset = data_file.data<uint64_t>()[patient_offset];
+        uint64_t num_bytes =
+            data_file.data<uint64_t>()[patient_offset + 1] - offset;
+
+        int64_t* start_timestamp =
+            (int64_t*)(data_file.bytes().data() + offset);
 
         uint32_t* length_pointer =
-            (uint32_t*)(data_file.bytes().data() + offset);
+            (uint32_t*)(data_file.bytes().data() + offset + sizeof(int64_t));
 
         size_t num_values = *length_pointer;
         if (values.size() < num_values) {
             values.resize(num_values * 2);
         }
 
-        size_t num_read =
-            streamvbyte_decode_0124((const uint8_t*)data_file.bytes().data() +
-                                        offset + sizeof(uint32_t),
-                                    values.data(), num_values);
+        size_t num_read = streamvbyte_decode_0124(
+            (const uint8_t*)data_file.bytes().data() + offset +
+                sizeof(uint32_t) + sizeof(int64_t),
+            values.data(), num_values);
 
-        if (num_read + sizeof(uint32_t) != num_bytes) {
+        if (num_read + sizeof(uint32_t) + sizeof(int64_t) != num_bytes) {
             throw std::runtime_error("Decoded too much? " +
                                      std::to_string(num_read) + " " +
                                      std::to_string(num_bytes));
@@ -322,11 +325,21 @@ struct TimePropertyReader : PropertyReader {
         std::vector<PyObjectWrapper> result;
         result.reserve(length);
 
-        absl::CivilSecond day(1970, 1, 1);
-        uint64_t microseconds = 0;
+        int64_t seconds_per_day = (int64_t)(24 * 60 * 60);
+        int64_t microseconds_per_second = (int64_t)(1000 * 1000);
 
-        uint64_t seconds_per_day = (uint64_t)(24 * 60 * 60);
-        uint64_t microseconds_per_second = (uint64_t)(1000 * 1000);
+        int64_t start_seconds = *start_timestamp / microseconds_per_second;
+        int64_t start_micros = *start_timestamp % microseconds_per_second;
+
+        if (start_micros < 0) {
+            start_micros += microseconds_per_second;
+            start_seconds -= 1;
+        }
+
+        absl::CivilSecond day(1970, 1, 1);
+        day += start_seconds;
+
+        int64_t microseconds = start_micros;
 
         auto add_times = [&](uint32_t copies) {
             PyObjectWrapper dt{PyDateTime_FromDateAndTime(
@@ -420,9 +433,9 @@ struct PrimitivePropertyReader : PropertyReader {
 
     std::vector<PyObjectWrapper> get_property_data(int32_t patient_offset,
                                                    int32_t length) {
-        uint32_t offset = data_file.data<uint32_t>()[patient_offset];
-        uint32_t num_bytes =
-            data_file.data<uint32_t>()[patient_offset + 1] - offset;
+        uint64_t offset = data_file.data<uint64_t>()[patient_offset];
+        uint64_t num_bytes =
+            data_file.data<uint64_t>()[patient_offset + 1] - offset;
 
         uint32_t* length_pointer =
             (uint32_t*)(data_file.bytes().data() + offset);

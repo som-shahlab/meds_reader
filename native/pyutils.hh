@@ -28,6 +28,17 @@ __attribute__((always_inline)) inline R convert(R (T::*mf)(Args...),
     }
 }
 
+template <typename R, typename... Args>
+__attribute__((always_inline)) inline R convert(R (*mf)(Args...),
+                                                Args&&... args) {
+    try {
+        return std::invoke(mf, std::forward<Args>(args)...);
+    } catch (std::exception& e) {
+        PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+        return return_error(static_cast<R*>(nullptr));
+    }
+}
+
 template <typename T, typename... Args>
 __attribute__((always_inline)) inline void convert_void(void (T::*mf)(Args...),
                                                         PyObject* obj,
@@ -56,6 +67,14 @@ decltype(auto) helper(R (T::*mf)(Args...),
                       std::enable_if_t<!std::is_void<R>::value>*) {
     return [](PyObject* arg, Args... args) -> R {
         return convert(actual_mf, arg, std::forward<Args>(args)...);
+    };
+}
+
+template <auto actual_mf, typename R, typename... Args>
+decltype(auto) helper(R (*mf)(Args...),
+                      std::enable_if_t<!std::is_void<R>::value>*) {
+    return [](Args... args) -> R {
+        return convert(actual_mf, std::forward<Args>(args)...);
     };
 }
 

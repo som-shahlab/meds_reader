@@ -25,3 +25,4 @@ Tracker = "https://github.com/EthanSteinberg/meds_reader/issues"
 
 [project.scripts]
 meds_reader_convert = "meds_reader:meds_reader_convert"
+meds_reader_verify = "meds_reader:meds_reader_verify"
