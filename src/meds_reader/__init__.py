@@ -104,12 +104,15 @@ def meds_reader_verify():
             pyarrow_patient["events"], reader_patient.events
         ):
             for property in database.properties:
+                actual = getattr(reader_event, property)
                 if property in pyarrow_event:
-                    assert pyarrow_event[property] == getattr(reader_event, property)
+                    expected = pyarrow_event[property]
                 else:
-                    assert pyarrow_event["properties"][property] == getattr(
-                        reader_event, property
-                    )
+                    expected = pyarrow_event["properties"][property]
+
+                assert (
+                    actual == expected
+                ), f"Got {actual} expected {expected} for {reader_patient} {pyarrow_event['time']} {reader_event.time}"
 
     for pyarrow_patient in python_objects:
         reader_patient = database[pyarrow_patient["patient_id"]]

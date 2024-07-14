@@ -814,12 +814,14 @@ void string_writer_thread(
             num_read = 0;
         }
 
+        size_t item_size = entry.first.size();
+
         auto attempt = items.try_emplace(std::move(entry.first), entry.second);
 
         if (attempt.second) {
             // Inserted, increase size
-            bytes_written += (entry.first.size() + sizeof(std::string) +
-                              sizeof(size_t) + sizeof(size_t));
+            bytes_written += (item_size + sizeof(std::string) + sizeof(size_t) +
+                              sizeof(size_t));
         } else {
             attempt.first->second += entry.second;
         }
@@ -830,7 +832,7 @@ void string_writer_thread(
     }
 }
 
-std::vector<std::pair<uint64_t, std::string>> merger_thread(
+std::vector<std::pair<std::string, uint64_t>> merger_thread(
     std::filesystem::path folder_to_merge) {
     auto context_deleter = [](ZSTD_DCtx* context) { ZSTD_freeDCtx(context); };
 
@@ -856,7 +858,7 @@ std::vector<std::pair<uint64_t, std::string>> merger_thread(
         }
     }
 
-    std::vector<std::pair<uint64_t, std::string>> entries;
+    std::vector<std::pair<std::string, uint64_t>> entries;
 
     std::string current_value = "";
     uint64_t current_count = 0;
@@ -865,7 +867,7 @@ std::vector<std::pair<uint64_t, std::string>> merger_thread(
         uint64_t num_patients = current_count >> 32;
         uint64_t num_times = current_count % (((uint64_t)1) << 32);
         if (num_patients > 1) {
-            entries.emplace_back(num_times, std::move(current_value));
+            entries.emplace_back(std::move(current_value), num_times);
         }
     };
 
@@ -983,10 +985,9 @@ void process_string_property(const std::string& property_name,
             queue.enqueue(std::make_pair("", 0));
         }
     };
-
     run_all(work_entries, num_threads, reader, end_reader, writer);
 
-    std::vector<std::vector<std::pair<uint64_t, std::string>>> all_entries(
+    std::vector<std::vector<std::pair<std::string, uint64_t>>> all_entries(
         num_threads);
 
     {
@@ -1006,17 +1007,20 @@ void process_string_property(const std::string& property_name,
         }
     }
 
-    std::vector<std::pair<size_t, std::string>> entries;
+    absl::flat_hash_map<std::string, uint64_t> entry_counts;
     for (const auto& e : all_entries) {
-        entries.insert(std::end(entries), std::begin(e), std::end(e));
+        for (const auto& ei : e) {
+            entry_counts[ei.first] += ei.second;
+        }
     }
+    auto context_deleter = [](ZSTD_CCtx* context) { ZSTD_freeCCtx(context); };
 
-    pdqsort(std::begin(entries), std::end(entries),
-            std::greater<decltype(entries)::value_type>());
+    std::vector<std::pair<std::string, uint64_t>> dictionary_list(
+        std::begin(entry_counts), std::end(entry_counts));
+    pdqsort(std::begin(dictionary_list), std::end(dictionary_list),
+            [](const auto& a, const auto& b) { return a.second > b.second; });
 
     absl::flat_hash_map<std::string, size_t> dictionary_entries;
-
-    auto context_deleter = [](ZSTD_CCtx* context) { ZSTD_freeCCtx(context); };
 
     std::unique_ptr<ZSTD_CCtx, decltype(context_deleter)> context{
         ZSTD_createCCtx(), context_deleter};
@@ -1025,10 +1029,10 @@ void process_string_property(const std::string& property_name,
         ZstdRowWriter writer((string_path / "dictionary").string(),
                              context.get());
 
-        for (size_t i = 0; i < entries.size(); i++) {
-            const auto& e = entries[i];
-            dictionary_entries[e.second] = i;
-            writer.add_next(e.second, e.first);
+        for (size_t i = 0; i < dictionary_list.size(); i++) {
+            const auto& e = dictionary_list[i];
+            dictionary_entries[e.first] = i;
+            writer.add_next(e.first, e.second);
         }
     }
 
