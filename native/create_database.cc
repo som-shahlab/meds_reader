@@ -778,7 +778,7 @@ void string_writer_thread(
                              context.get());
         next_index++;
 
-        for (const auto& item : items) {
+        for (const auto& item : vector) {
             writer.add_next(item.first, item.second);
         }
 
@@ -832,7 +832,7 @@ void string_writer_thread(
     }
 }
 
-std::vector<std::pair<std::string, uint64_t>> merger_thread(
+std::vector<std::pair<uint64_t, std::string>> merger_thread(
     std::filesystem::path folder_to_merge) {
     auto context_deleter = [](ZSTD_DCtx* context) { ZSTD_freeDCtx(context); };
 
@@ -858,7 +858,7 @@ std::vector<std::pair<std::string, uint64_t>> merger_thread(
         }
     }
 
-    std::vector<std::pair<std::string, uint64_t>> entries;
+    std::vector<std::pair<uint64_t, std::string>> entries;
 
     std::string current_value = "";
     uint64_t current_count = 0;
@@ -867,7 +867,7 @@ std::vector<std::pair<std::string, uint64_t>> merger_thread(
         uint64_t num_patients = current_count >> 32;
         uint64_t num_times = current_count % (((uint64_t)1) << 32);
         if (num_patients > 1) {
-            entries.emplace_back(std::move(current_value), num_times);
+            entries.emplace_back(num_times, std::move(current_value));
         }
     };
 
@@ -882,6 +882,12 @@ std::vector<std::pair<std::string, uint64_t>> merger_thread(
         if (current_value == std::get<0>(next)) {
             current_count += std::get<1>(next);
         } else {
+            if (current_value >= std::get<0>(next)) {
+                std::cout << "Should not happen " << current_value << " "
+                          << std::get<0>(next) << " "
+                          << (current_value < std::get<0>(next)) << std::endl;
+                abort();
+            }
             flush();
             current_value = std::string(std::get<0>(next));
             current_count = std::get<1>(next);
@@ -987,7 +993,7 @@ void process_string_property(const std::string& property_name,
     };
     run_all(work_entries, num_threads, reader, end_reader, writer);
 
-    std::vector<std::vector<std::pair<std::string, uint64_t>>> all_entries(
+    std::vector<std::vector<std::pair<uint64_t, std::string>>> all_entries(
         num_threads);
 
     {
@@ -1007,18 +1013,35 @@ void process_string_property(const std::string& property_name,
         }
     }
 
-    absl::flat_hash_map<std::string, uint64_t> entry_counts;
-    for (const auto& e : all_entries) {
-        for (const auto& ei : e) {
-            entry_counts[ei.first] += ei.second;
+    absl::flat_hash_map<std::string, std::pair<size_t, size_t>> found;
+
+    std::vector<std::pair<uint64_t, std::string>> entries;
+    size_t e_index = 0;
+    for (auto& e : all_entries) {
+        size_t ei_index = 0;
+        for (auto& ei : e) {
+#ifndef NDEBUG
+            if (found.count(ei.second) != 0) {
+                std::cout << "Got duplicate! " << ei.second << " " << ei.first
+                          << " " << e_index << " " << ei_index << " "
+                          << found[ei.second].first << " "
+                          << found[ei.second].second << std::endl;
+                abort();
+            }
+            found[ei.second].first = e_index;
+            found[ei.second].second = ei_index;
+#endif
+
+            entries.emplace_back(std::move(ei));
+            ei_index++;
         }
+        e_index++;
     }
+
     auto context_deleter = [](ZSTD_CCtx* context) { ZSTD_freeCCtx(context); };
 
-    std::vector<std::pair<std::string, uint64_t>> dictionary_list(
-        std::begin(entry_counts), std::end(entry_counts));
-    pdqsort(std::begin(dictionary_list), std::end(dictionary_list),
-            [](const auto& a, const auto& b) { return a.second > b.second; });
+    pdqsort(std::begin(entries), std::end(entries),
+            std::greater<std::pair<uint64_t, std::string>>());
 
     absl::flat_hash_map<std::string, size_t> dictionary_entries;
 
@@ -1029,10 +1052,13 @@ void process_string_property(const std::string& property_name,
         ZstdRowWriter writer((string_path / "dictionary").string(),
                              context.get());
 
-        for (size_t i = 0; i < dictionary_list.size(); i++) {
-            const auto& e = dictionary_list[i];
-            dictionary_entries[e.first] = i;
-            writer.add_next(e.first, e.second);
+        for (size_t i = 0; i < entries.size(); i++) {
+            const auto& e = entries[i];
+            auto iter = dictionary_entries.try_emplace(std::move(e.second), i);
+            if (!iter.second) {
+                throw std::runtime_error("Already inserted? " + e.second);
+            }
+            writer.add_next(e.second, e.first);
         }
     }
 
