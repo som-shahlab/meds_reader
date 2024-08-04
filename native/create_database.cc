@@ -37,6 +37,7 @@
 #include "streamvbyte.h"
 #include "zdict.h"
 #include "zstd.h"
+#include "binary_version.hh"
 
 namespace {
 
@@ -272,19 +273,20 @@ bool are_maps_equivalent(
     return true;
 }
 
-typedef std::tuple<std::filesystem::path, int64_t, int64_t, size_t> WorkEntry;
+typedef std::pair<std::filesystem::path, size_t> WorkEntry;
 
 std::pair<std::map<std::string, std::shared_ptr<arrow::DataType>>,
           std::vector<WorkEntry>>
 read_files(std::filesystem::path root_directory, int num_threads) {
     std::map<std::string, std::shared_ptr<arrow::DataType>> properties;
 
-    std::vector<std::pair<std::filesystem::path, int64_t>> files_to_process;
-
-    int total_row_groups = 0;
+    std::vector<std::pair<std::filesystem::path, size_t>> work_entries;
 
     for (const auto& dir_entry :
-         std::filesystem::directory_iterator(root_directory)) {
+         std::filesystem::recursive_directory_iterator(root_directory)) {
+        if (dir_entry.path().extension() != ".parquet") {
+            continue;
+        }
         arrow::MemoryPool* pool = arrow::default_memory_pool();
 
         // Configure general Parquet reader settings
@@ -315,54 +317,19 @@ read_files(std::filesystem::path root_directory, int num_threads) {
             }
         }
 
-        files_to_process.push_back(
-            std::make_pair(dir_entry.path(), arrow_reader->num_row_groups()));
-        total_row_groups += arrow_reader->num_row_groups();
+        size_t index = work_entries.size();
+        work_entries.push_back(std::make_pair(dir_entry.path(), index));
     }
 
-    int row_groups_per_thread =
-        (total_row_groups + num_threads - 1) / num_threads;
-
-    size_t current_file_index = 0;
-    int current_row_groups_used = 0;
-
-    std::vector<std::tuple<std::filesystem::path, int64_t, int64_t, size_t>>
-        result;
-
-    while (true) {
-        if (current_file_index == files_to_process.size()) {
-            break;
-        }
-
-        int remaining_row_groups = files_to_process[current_file_index].second -
-                                   current_row_groups_used;
-        int to_use = std::min(remaining_row_groups, row_groups_per_thread);
-
-        size_t index = result.size();
-
-        result.push_back(std::make_tuple(
-            files_to_process[current_file_index].first, current_row_groups_used,
-            current_row_groups_used + to_use, index));
-
-        current_row_groups_used += to_use;
-
-        if (current_row_groups_used ==
-            files_to_process[current_file_index].second) {
-            current_file_index++;
-            current_row_groups_used = 0;
-        }
-    }
-
-    return {properties, result};
+    return {properties, work_entries};
 }
 
-std::set<std::string> known_properties = {"code", "text_value", "numeric_value",
-                                          "datetime_value"};
+std::set<std::string> known_properties = {"code", "numeric_value"};
 
-template <typename F>
-void iterate_strings(
-    std::filesystem::path filename, int64_t start_row_group,
-    int64_t end_row_group, std::string property_name,
+template <typename F, typename A>
+void iterate_strings_helper(
+    const std::filesystem::path& filename, const std::string& property_name,
+    const std::vector<uint32_t>& patient_lengths,
     const absl::flat_hash_map<std::string, size_t>& dictionary_entries,
     F func) {
     arrow::MemoryPool* pool = arrow::default_memory_pool();
@@ -388,171 +355,195 @@ void iterate_strings(
     auto properties = get_properties(arrow_reader->manifest());
 
     int64_t column = properties.find(property_name)->second.second;
+
     std::vector<int> columns = {(int)column};
 
-    for (int64_t row_group = start_row_group; row_group < end_row_group;
+    size_t next_patient_index = 0;
+    size_t remaining_events;
+    bool has_event = false;
+
+    absl::flat_hash_map<std::string, uint32_t> per_patient_values;
+
+    std::vector<char> null_bytes;
+    std::vector<uint32_t> text_value_lengths;
+    std::vector<char> text_value_bytes;
+    std::vector<uint32_t> values;
+    size_t offset_in_bitset;
+    std::bitset<sizeof(uint64_t) * 8> bitset;
+    uint64_t* nullmap_offset;
+
+    auto flush = [&]() {
+        *nullmap_offset++ = bitset.to_ulong();
+        offset_in_bitset = 0;
+        bitset.reset();
+    };
+
+    auto flush_patient = [&]() {
+        if (offset_in_bitset != 0) {
+            flush();
+        }
+
+        text_value_lengths[0] = text_value_lengths.size() - 1;
+        text_value_lengths.insert(std::end(text_value_lengths),
+                                  std::begin(values), std::end(values));
+
+        std::vector<char> helper(
+            sizeof(uint32_t) +
+            streamvbyte_max_compressedbytes(text_value_lengths.size()));
+
+        size_t count = streamvbyte_encode(
+            text_value_lengths.data(), text_value_lengths.size(),
+            (uint8_t*)helper.data() + sizeof(uint32_t));
+
+        uint32_t* length_pointer = (uint32_t*)helper.data();
+        *length_pointer = text_value_lengths.size();
+
+        helper.resize(sizeof(uint32_t) + count);
+
+        helper.insert(std::end(helper), std::begin(text_value_bytes),
+                      std::end(text_value_bytes));
+
+        null_bytes.insert(std::end(null_bytes), std::begin(helper),
+                          std::end(helper));
+
+        func(null_bytes);
+    };
+
+    auto write_null = [&]() {
+        offset_in_bitset++;
+        if (offset_in_bitset == bitset.size()) {
+            flush();
+        }
+    };
+
+    auto write_value = [&](std::string_view text) {
+        auto iter = dictionary_entries.find(text);
+
+        if (iter != std::end(dictionary_entries)) {
+            values.push_back(iter->second);
+        } else {
+            auto custom = per_patient_values.try_emplace(
+                text, per_patient_values.size() + dictionary_entries.size());
+
+            if (custom.second) {
+                text_value_lengths.push_back(text.size());
+                text_value_bytes.insert(std::end(text_value_bytes),
+                                        std::begin(text), std::end(text));
+            }
+            values.push_back(custom.first->second);
+        }
+
+        bitset.set(offset_in_bitset);
+        offset_in_bitset++;
+        if (offset_in_bitset == bitset.size()) {
+            flush();
+        }
+    };
+
+    auto add_value = [&](std::string_view value) {
+        if (!has_event || remaining_events == 0) {
+            if (has_event) {
+                flush_patient();
+            } else {
+                has_event = true;
+            }
+
+            remaining_events = patient_lengths[next_patient_index++];
+
+            per_patient_values.clear();
+            null_bytes.clear();
+            text_value_lengths.clear();
+            text_value_lengths.push_back(0);
+
+            text_value_bytes.clear();
+            values.clear();
+            offset_in_bitset = 0;
+            bitset.reset();
+
+            auto num_null_bytes =
+                (remaining_events + bitset.size() - 1) / bitset.size();
+
+            null_bytes.resize(num_null_bytes * sizeof(uint64_t));
+
+            nullmap_offset = (uint64_t*)null_bytes.data();
+        }
+
+        if (value.empty()) {
+            write_null();
+        } else {
+            write_value(value);
+        }
+
+        remaining_events--;
+    };
+
+    for (int64_t row_group = 0; row_group < arrow_reader->num_row_groups();
          row_group++) {
         std::shared_ptr<arrow::Table> table;
         PARQUET_THROW_NOT_OK(
             arrow_reader->ReadRowGroup(row_group, columns, &table));
 
-        auto chunked_events = table->GetColumnByName("events");
+        auto chunked_values = table->GetColumnByName(property_name);
 
-        for (const auto& event_chunk : chunked_events->chunks()) {
-            auto events =
-                std::dynamic_pointer_cast<arrow::ListArray>(event_chunk);
-            if (events == nullptr) {
-                throw std::runtime_error("Could not cast events");
-            }
-
-            auto event =
-                std::dynamic_pointer_cast<arrow::StructArray>(events->values());
-            if (event == nullptr) {
-                throw std::runtime_error("Could not cast event");
-            }
-
-            if (known_properties.count(property_name) == 0) {
-                event = std::dynamic_pointer_cast<arrow::StructArray>(
-                    event->GetFieldByName("properties"));
-                if (event == nullptr) {
-                    throw std::runtime_error("Could not cast properties");
-                }
-            }
-
-            auto array = event->GetFieldByName(property_name);
-            if (array == nullptr) {
-                throw std::runtime_error("Could not find property");
-            }
-            auto string_array =
-                std::dynamic_pointer_cast<arrow::StringArray>(array);
+        for (const auto& array : chunked_values->chunks()) {
+            auto string_array = std::dynamic_pointer_cast<A>(array);
             if (string_array == nullptr) {
                 throw std::runtime_error("Could not cast property");
             }
 
-            absl::flat_hash_map<std::string, uint32_t> per_patient_values;
-
-            for (int64_t patient_id = 0; patient_id < events->length();
-                 patient_id++) {
-                per_patient_values.clear();
-
-                std::vector<char> null_bytes;
-                std::vector<uint32_t> text_value_lengths;
-                std::vector<char> text_value_bytes;
-                std::vector<uint32_t> values = {};
-
-                text_value_lengths.push_back(0);
-
-                size_t offset_in_bitset = 0;
-                std::bitset<sizeof(uint64_t)* 8> bitset = {};
-
-                auto num_events = events->value_length(patient_id);
-                auto num_null_bytes =
-                    (num_events + bitset.size() - 1) / bitset.size();
-
-                null_bytes.resize(num_null_bytes * sizeof(uint64_t));
-
-                uint64_t* nullmap_offset = (uint64_t*)null_bytes.data();
-
-                auto flush = [&]() {
-                    *nullmap_offset++ = bitset.to_ulong();
-                    offset_in_bitset = 0;
-                    bitset.reset();
-                };
-
-                auto write_null = [&]() {
-                    offset_in_bitset++;
-                    if (offset_in_bitset == bitset.size()) {
-                        flush();
-                    }
-                };
-
-                auto write_value = [&](std::string_view text) {
-                    auto iter = dictionary_entries.find(text);
-
-                    if (iter != std::end(dictionary_entries)) {
-                        values.push_back(iter->second);
-                    } else {
-                        auto custom = per_patient_values.try_emplace(
-                            text, per_patient_values.size() +
-                                      dictionary_entries.size());
-
-                        if (custom.second) {
-                            text_value_lengths.push_back(text.size());
-                            text_value_bytes.insert(std::end(text_value_bytes),
-                                                    std::begin(text),
-                                                    std::end(text));
-                        }
-                        values.push_back(custom.first->second);
-                    }
-
-                    bitset.set(offset_in_bitset);
-                    offset_in_bitset++;
-                    if (offset_in_bitset == bitset.size()) {
-                        flush();
-                    }
-                };
-
-                for (int64_t i = events->value_offset(patient_id);
-                     i < events->value_offset(patient_id) +
-                             events->value_length(patient_id);
-                     i++) {
-                    if (string_array->IsNull(i)) {
-                        write_null();
-                        continue;
-                    }
-
+            for (int64_t i = 0; i < string_array->length(); i++) {
+                if (string_array->IsNull(i)) {
+                    add_value(std::string_view());
+                } else {
                     std::string_view item = string_array->GetView(i);
-
-                    if (item.empty()) {
-                        write_null();
-                        continue;
-                    }
-
-                    write_value(item);
+                    add_value(item);
                 }
-
-                if (offset_in_bitset != 0) {
-                    flush();
-                }
-
-                text_value_lengths[0] = text_value_lengths.size() - 1;
-                text_value_lengths.insert(std::end(text_value_lengths),
-                                          std::begin(values), std::end(values));
-
-                std::vector<char> helper(
-                    sizeof(uint32_t) +
-                    streamvbyte_max_compressedbytes(text_value_lengths.size()));
-
-                size_t count = streamvbyte_encode(
-                    text_value_lengths.data(), text_value_lengths.size(),
-                    (uint8_t*)helper.data() + sizeof(uint32_t));
-
-                uint32_t* length_pointer = (uint32_t*)helper.data();
-                *length_pointer = text_value_lengths.size();
-
-                helper.resize(sizeof(uint32_t) + count);
-
-                helper.insert(std::end(helper), std::begin(text_value_bytes),
-                              std::end(text_value_bytes));
-
-                null_bytes.insert(std::end(null_bytes), std::begin(helper),
-                                  std::end(helper));
-
-                func(null_bytes);
             }
         }
     }
+
+    if (has_event) {
+        flush_patient();
+    }
+}
+
+template <typename F>
+void iterate_strings(
+    const std::filesystem::path& filename, const std::string& property_name,
+
+    const std::shared_ptr<arrow::DataType>& type,
+
+    const std::vector<uint32_t>& patient_lengths,
+    const absl::flat_hash_map<std::string, size_t>& dictionary_entries,
+    F func) {
+    switch (type->id()) {
+        case arrow::Type::STRING:
+            iterate_strings_helper<F, arrow::StringArray>(
+                filename, property_name, patient_lengths, dictionary_entries,
+                func);
+            break;
+
+        case arrow::Type::LARGE_STRING:
+            iterate_strings_helper<F, arrow::LargeStringArray>(
+                filename, property_name, patient_lengths, dictionary_entries,
+                func);
+            break;
+
+        default:
+            throw std::runtime_error("Unsupported type " + type->ToString());
+    };
 }
 
 std::vector<std::vector<char>> get_samples(
-    std::filesystem::path filename, int64_t start_row_group,
-    int64_t end_row_group, std::string property_name,
+    std::filesystem::path filename, std::string property_name,
+    const std::shared_ptr<arrow::DataType>& type,
+    const std::vector<uint32_t>& patient_lengths,
     const absl::flat_hash_map<std::string, size_t>& dictionary_entries,
     size_t num_samples) {
     size_t sample_count = 0;
     std::vector<std::vector<char>> samples;
 
-    iterate_strings(filename, start_row_group, end_row_group, property_name,
+    iterate_strings(filename, property_name, type, patient_lengths,
                     dictionary_entries, [&](std::vector<char> bytes) {
                         sample_count++;
 
@@ -570,8 +561,9 @@ std::vector<std::vector<char>> get_samples(
 }
 
 std::pair<size_t, std::vector<uint64_t>> write_files(
-    std::filesystem::path filename, int64_t start_row_group,
-    int64_t end_row_group, std::string property_name,
+    std::filesystem::path filename, std::string property_name,
+    const std::shared_ptr<arrow::DataType>& type,
+    const std::vector<uint32_t>& patient_lengths,
     const absl::flat_hash_map<std::string, size_t>& dictionary_entries,
     const std::vector<char>& dictionary,
     std::filesystem::path target_filename) {
@@ -602,8 +594,8 @@ std::pair<size_t, std::vector<uint64_t>> write_files(
     }
 
     iterate_strings(
-        filename, start_row_group, end_row_group, property_name,
-        dictionary_entries, [&](std::vector<char> bytes) {
+        filename, property_name, type, patient_lengths, dictionary_entries,
+        [&](std::vector<char> bytes) {
             std::vector<char> final_bytes(sizeof(uint32_t) +
                                           ZSTD_compressBound(bytes.size()));
             res = ZSTD_compress2(
@@ -629,9 +621,10 @@ std::pair<size_t, std::vector<uint64_t>> write_files(
     return std::make_pair(num_bytes, std::move(offsets));
 }
 
-void string_reader_thread(
-    std::filesystem::path filename, int64_t start_row_group,
-    int64_t end_row_group, std::string property_name,
+template <typename A>
+void string_reader_thread_helper(
+    const std::filesystem::path& filename, const std::string& property_name,
+    const std::vector<uint32_t>& patient_lengths,
     std::vector<
         moodycamel::BlockingConcurrentQueue<std::pair<std::string, uint64_t>>>&
         all_write_queues,
@@ -663,87 +656,100 @@ void string_reader_thread(
 
     ssize_t slots_to_write = queue_semaphore.waitMany(SEMAPHORE_BLOCK_SIZE);
 
-    for (int64_t row_group = start_row_group; row_group < end_row_group;
+    absl::flat_hash_map<std::string, uint64_t> items;
+
+    size_t next_patient_index = 0;
+    size_t remaining_events;
+    bool has_event = false;
+
+    auto flush_patient = [&]() {
+        for (auto& item : items) {
+            size_t h = std::hash<std::string>{}(item.first);
+            size_t partition = h % all_write_queues.size();
+
+            item.second += (((uint64_t)1) << 32);
+
+            if (slots_to_write == 0) {
+                slots_to_write = queue_semaphore.waitMany(SEMAPHORE_BLOCK_SIZE);
+            }
+            slots_to_write--;
+
+            all_write_queues[partition].enqueue(std::move(item));
+        }
+    };
+
+    auto add_value = [&](std::string_view item) {
+        if (!has_event || remaining_events == 0) {
+            if (has_event) {
+                flush_patient();
+            }
+
+            items.clear();
+            remaining_events = patient_lengths[next_patient_index++];
+        }
+
+        if (!item.empty()) {
+            items[item] += 1;
+        }
+
+        remaining_events--;
+    };
+
+    for (int64_t row_group = 0; row_group < arrow_reader->num_row_groups();
          row_group++) {
         std::shared_ptr<arrow::Table> table;
         PARQUET_THROW_NOT_OK(
             arrow_reader->ReadRowGroup(row_group, columns, &table));
 
-        auto chunked_events = table->GetColumnByName("events");
+        auto chunked_values = table->GetColumnByName(property_name);
 
-        for (const auto& event_chunk : chunked_events->chunks()) {
-            auto events =
-                std::dynamic_pointer_cast<arrow::ListArray>(event_chunk);
-            if (events == nullptr) {
-                throw std::runtime_error("Could not cast events");
-            }
-
-            auto event =
-                std::dynamic_pointer_cast<arrow::StructArray>(events->values());
-            if (event == nullptr) {
-                throw std::runtime_error("Could not cast event");
-            }
-
-            if (known_properties.count(property_name) == 0) {
-                event = std::dynamic_pointer_cast<arrow::StructArray>(
-                    event->GetFieldByName("properties"));
-                if (event == nullptr) {
-                    throw std::runtime_error("Could not cast properties");
-                }
-            }
-
-            auto array = event->GetFieldByName(property_name);
-            if (array == nullptr) {
-                throw std::runtime_error("Could not find property");
-            }
-            auto string_array =
-                std::dynamic_pointer_cast<arrow::StringArray>(array);
+        for (const auto& array : chunked_values->chunks()) {
+            auto string_array = std::dynamic_pointer_cast<A>(array);
             if (string_array == nullptr) {
                 throw std::runtime_error("Could not cast property");
             }
 
-            absl::flat_hash_map<std::string, uint64_t> items;
-
-            for (int64_t patient_id = 0; patient_id < events->length();
-                 patient_id++) {
-                items.clear();
-
-                for (int64_t i = events->value_offset(patient_id);
-                     i < events->value_offset(patient_id) +
-                             events->value_length(patient_id);
-                     i++) {
-                    if (string_array->IsNull(i)) {
-                        continue;
-                    }
-
-                    std::string_view item = string_array->GetView(i);
-
-                    if (item.empty()) {
-                        continue;
-                    }
-
-                    items[item]++;
-                }
-
-                for (auto& item : items) {
-                    size_t h = std::hash<std::string>{}(item.first);
-                    size_t partition = h % all_write_queues.size();
-
-                    item.second += (((uint64_t)1) << 32);
-
-                    if (slots_to_write == 0) {
-                        slots_to_write =
-                            queue_semaphore.waitMany(SEMAPHORE_BLOCK_SIZE);
-                    }
-                    slots_to_write--;
-
-                    all_write_queues[partition].enqueue(std::move(item));
+            for (int64_t i = 0; i < string_array->length(); i++) {
+                if (string_array->IsNull(i)) {
+                    add_value(std::string_view());
+                } else {
+                    add_value(string_array->GetView(i));
                 }
             }
         }
     }
 
+    if (items.size() != 0) {
+        flush_patient();
+    }
+
     queue_semaphore.signal(slots_to_write);
+}
+
+void string_reader_thread(
+    const std::filesystem::path& filename, const std::string& property_name,
+    const std::shared_ptr<arrow::DataType>& type,
+    const std::vector<uint32_t>& patient_lengths,
+    std::vector<
+        moodycamel::BlockingConcurrentQueue<std::pair<std::string, uint64_t>>>&
+        all_write_queues,
+    moodycamel::LightweightSemaphore& queue_semaphore) {
+    switch (type->id()) {
+        case arrow::Type::STRING:
+            string_reader_thread_helper<arrow::StringArray>(
+                filename, property_name, patient_lengths, all_write_queues,
+                queue_semaphore);
+            break;
+
+        case arrow::Type::LARGE_STRING:
+            string_reader_thread_helper<arrow::LargeStringArray>(
+                filename, property_name, patient_lengths, all_write_queues,
+                queue_semaphore);
+            break;
+
+        default:
+            throw std::runtime_error("Unsupported type " + type->ToString());
+    };
 }
 
 void string_writer_thread(
@@ -950,10 +956,13 @@ void run_all(const std::vector<WorkEntry>& work_entries, int num_threads,
         [](std::vector<std::thread>& threads) {});
 }
 
-void process_string_property(const std::string& property_name,
-                             std::filesystem::path temp_path,
-                             const std::vector<WorkEntry>& work_entries,
-                             int num_threads) {
+void process_string_property(
+    const std::string& property_name,
+
+    const std::shared_ptr<arrow::DataType>& type,
+    const std::vector<std::vector<uint32_t>>& patient_lengths,
+    std::filesystem::path temp_path, const std::vector<WorkEntry>& work_entries,
+    int num_threads) {
     std::filesystem::path string_path = temp_path / property_name;
     std::filesystem::create_directories(string_path);
 
@@ -965,11 +974,11 @@ void process_string_property(const std::string& property_name,
 
     moodycamel::LightweightSemaphore write_semaphore(QUEUE_SIZE * num_threads);
 
-    auto reader = [&property_name, &queues, &write_semaphore](
-                      const std::filesystem::path fname, size_t start_row,
-                      size_t end_row, size_t index) {
-        string_reader_thread(fname, start_row, end_row, property_name, queues,
-                             write_semaphore);
+    auto reader = [&property_name, &type, &patient_lengths, &queues,
+                   &write_semaphore](const std::filesystem::path fname,
+                                     size_t index) {
+        string_reader_thread(fname, property_name, type, patient_lengths[index],
+                             queues, write_semaphore);
     };
 
     auto writer = [num_threads, &string_path, &queues,
@@ -1068,15 +1077,14 @@ void process_string_property(const std::string& property_name,
     size_t num_samples_per_entry =
         (10 * 1000 + work_entries.size() - 1) / work_entries.size();
 
-    run_all(
-        work_entries, num_threads,
-        [&all_samples, &property_name, &dictionary_entries,
-         num_samples_per_entry](std::filesystem::path path, size_t start_row,
-                                size_t end_row, size_t index) {
-            all_samples[index] =
-                get_samples(path, start_row, end_row, property_name,
-                            dictionary_entries, num_samples_per_entry);
-        });
+    run_all(work_entries, num_threads,
+            [&all_samples, &property_name, &type, &patient_lengths,
+             &dictionary_entries,
+             num_samples_per_entry](std::filesystem::path path, size_t index) {
+                all_samples[index] = get_samples(
+                    path, property_name, type, patient_lengths[index],
+                    dictionary_entries, num_samples_per_entry);
+            });
 
     std::vector<size_t> sample_sizes;
     std::vector<char> sample_buffer;
@@ -1113,14 +1121,14 @@ void process_string_property(const std::string& property_name,
         work_entries.size());
 
     run_all(work_entries, num_threads,
-            [&all_lengths, &string_path, &property_name, &dictionary_entries,
-             &dictionary](std::filesystem::path path, size_t start_row,
-                          size_t end_row, size_t index) {
+            [&all_lengths, &string_path, &property_name, &type,
+             &patient_lengths, &dictionary_entries,
+             &dictionary](std::filesystem::path path, size_t index) {
                 std::filesystem::path target_path =
                     string_path / (std::to_string(index) + ".data");
-                all_lengths[index] =
-                    write_files(path, start_row, end_row, property_name,
-                                dictionary_entries, dictionary, target_path);
+                all_lengths[index] = write_files(
+                    path, property_name, type, patient_lengths[index],
+                    dictionary_entries, dictionary, target_path);
             });
 
     size_t num_patients = 0;
@@ -1140,8 +1148,7 @@ void process_string_property(const std::string& property_name,
     }
 
     run_all(work_entries, num_threads,
-            [&all_lengths](std::filesystem::path path, size_t start_row,
-                           size_t end_row, size_t index) {
+            [&all_lengths](std::filesystem::path path, size_t index) {
                 auto& item = all_lengths[index];
                 for (auto& val : item.second) {
                     val += item.first;
@@ -1155,7 +1162,7 @@ void process_string_property(const std::string& property_name,
                                                         std::ios_base::trunc);
 
     for (const auto& entry : work_entries) {
-        auto& item = all_lengths[std::get<3>(entry)];
+        auto& item = all_lengths[entry.second];
         ssize_t num_to_write = item.second.size() * sizeof(uint64_t);
         const char* buffer = (const char*)item.second.data();
         data_file.write(buffer, num_to_write);
@@ -1163,7 +1170,7 @@ void process_string_property(const std::string& property_name,
 
     for (const auto& entry : work_entries) {
         std::filesystem::path entry_path =
-            string_path / (std::to_string(std::get<3>(entry)) + ".data");
+            string_path / (std::to_string(entry.second) + ".data");
 
         std::ifstream entry_file(entry_path,
                                  std::ios_base::in | std::ios_base::binary);
@@ -1175,9 +1182,9 @@ void process_string_property(const std::string& property_name,
 }
 
 template <typename F>
-void iterate_primitive(std::filesystem::path filename, int64_t start_row_group,
-                       int64_t end_row_group, std::string property_name,
-                       F func) {
+void iterate_primitive(std::filesystem::path filename,
+                       std::string property_name,
+                       const std::vector<uint32_t>& patient_lengths, F func) {
     arrow::MemoryPool* pool = arrow::default_memory_pool();
 
     // Configure general Parquet reader settings
@@ -1203,39 +1210,93 @@ void iterate_primitive(std::filesystem::path filename, int64_t start_row_group,
     int64_t column = properties.find(property_name)->second.second;
     std::vector<int> columns = {(int)column};
 
-    for (int64_t row_group = start_row_group; row_group < end_row_group;
+    size_t next_patient_index = 0;
+    size_t remaining_events;
+    bool has_event = false;
+
+    std::vector<char> null_bytes;
+    std::vector<char> value_bytes;
+
+    size_t offset_in_bitset;
+    std::bitset<sizeof(uint64_t) * 8> bitset;
+    uint64_t* nullmap_offset;
+
+    auto flush = [&]() {
+        *nullmap_offset++ = bitset.to_ulong();
+        offset_in_bitset = 0;
+        bitset.reset();
+    };
+
+    auto flush_patient = [&]() {
+        if (offset_in_bitset != 0) {
+            flush();
+        }
+
+        null_bytes.insert(std::end(null_bytes), std::begin(value_bytes),
+                          std::end(value_bytes));
+
+        func(std::move(null_bytes));
+    };
+
+    auto write_null = [&]() {
+        offset_in_bitset++;
+        if (offset_in_bitset == bitset.size()) {
+            flush();
+        }
+    };
+
+    auto write_value = [&](std::string_view text) {
+        value_bytes.insert(std::end(value_bytes), std::begin(text),
+                           std::end(text));
+
+        bitset.set(offset_in_bitset);
+        offset_in_bitset++;
+        if (offset_in_bitset == bitset.size()) {
+            flush();
+        }
+    };
+
+    auto add_value = [&](std::string_view value) {
+        if (!has_event || remaining_events == 0) {
+            if (has_event) {
+                flush_patient();
+            } else {
+                has_event = true;
+            }
+
+            remaining_events = patient_lengths[next_patient_index++];
+
+            null_bytes.clear();
+            value_bytes.clear();
+            offset_in_bitset = 0;
+            bitset.reset();
+
+            auto num_null_bytes =
+                (remaining_events + bitset.size() - 1) / bitset.size();
+
+            null_bytes.resize(num_null_bytes * sizeof(uint64_t));
+
+            nullmap_offset = (uint64_t*)null_bytes.data();
+        }
+
+        if (value.empty()) {
+            write_null();
+        } else {
+            write_value(value);
+        }
+
+        remaining_events--;
+    };
+
+    for (int64_t row_group = 0; row_group < arrow_reader->num_row_groups();
          row_group++) {
         std::shared_ptr<arrow::Table> table;
         PARQUET_THROW_NOT_OK(
             arrow_reader->ReadRowGroup(row_group, columns, &table));
 
-        auto chunked_events = table->GetColumnByName("events");
+        auto chunked_values = table->GetColumnByName(property_name);
 
-        for (const auto& event_chunk : chunked_events->chunks()) {
-            auto events =
-                std::dynamic_pointer_cast<arrow::ListArray>(event_chunk);
-            if (events == nullptr) {
-                throw std::runtime_error("Could not cast events");
-            }
-
-            auto event =
-                std::dynamic_pointer_cast<arrow::StructArray>(events->values());
-            if (event == nullptr) {
-                throw std::runtime_error("Could not cast event");
-            }
-
-            if (known_properties.count(property_name) == 0) {
-                event = std::dynamic_pointer_cast<arrow::StructArray>(
-                    event->GetFieldByName("properties"));
-                if (event == nullptr) {
-                    throw std::runtime_error("Could not cast properties");
-                }
-            }
-
-            auto array = event->GetFieldByName(property_name);
-            if (array == nullptr) {
-                throw std::runtime_error("Could not find property");
-            }
+        for (const auto& array : chunked_values->chunks()) {
             auto primitive_array =
                 std::dynamic_pointer_cast<arrow::PrimitiveArray>(array);
             if (primitive_array == nullptr) {
@@ -1244,83 +1305,32 @@ void iterate_primitive(std::filesystem::path filename, int64_t start_row_group,
 
             int32_t type_bytes = primitive_array->type()->byte_width();
 
-            if (type_bytes == -1) {
-                throw std::runtime_error("Could not have a byte size of -1");
-            }
-
-            for (int64_t patient_id = 0; patient_id < events->length();
-                 patient_id++) {
-                std::vector<char> null_bytes;
-                std::vector<char> value_bytes = {};
-
-                size_t offset_in_bitset = 0;
-                std::bitset<sizeof(uint64_t)* 8> bitset = {};
-
-                auto num_events = events->value_length(patient_id);
-                auto num_null_bytes =
-                    (num_events + bitset.size() - 1) / bitset.size();
-
-                null_bytes.resize(num_null_bytes * sizeof(uint64_t));
-
-                uint64_t* nullmap_offset = (uint64_t*)null_bytes.data();
-
-                auto flush = [&]() {
-                    *nullmap_offset++ = bitset.to_ulong();
-                    offset_in_bitset = 0;
-                    bitset.reset();
-                };
-
-                auto write_null = [&]() {
-                    offset_in_bitset++;
-                    if (offset_in_bitset == bitset.size()) {
-                        flush();
-                    }
-                };
-
-                auto write_value = [&](std::string_view text) {
-                    value_bytes.insert(std::end(value_bytes), std::begin(text),
-                                       std::end(text));
-
-                    bitset.set(offset_in_bitset);
-                    offset_in_bitset++;
-                    if (offset_in_bitset == bitset.size()) {
-                        flush();
-                    }
-                };
-
-                for (int64_t i = events->value_offset(patient_id);
-                     i < events->value_offset(patient_id) + num_events; i++) {
-                    if (primitive_array->IsNull(i)) {
-                        write_null();
-                    } else {
-                        std::string_view item{
-                            (const char*)primitive_array->values()->data() +
-                                (primitive_array->offset() + i) * type_bytes,
-                            (size_t)type_bytes};
-                        write_value(item);
-                    }
+            for (int64_t i = 0; i < primitive_array->length(); i++) {
+                if (primitive_array->IsNull(i)) {
+                    add_value(std::string_view());
+                } else {
+                    std::string_view item(
+                        (const char*)primitive_array->values()->data() +
+                            (primitive_array->offset() + i) * type_bytes,
+                        (size_t)type_bytes);
+                    add_value(item);
                 }
-
-                if (offset_in_bitset != 0) {
-                    flush();
-                }
-
-                null_bytes.insert(std::end(null_bytes), std::begin(value_bytes),
-                                  std::end(value_bytes));
-
-                func(std::move(null_bytes));
             }
         }
+    }
+
+    if (has_event) {
+        flush_patient();
     }
 }
 
 std::vector<std::vector<char>> get_primitive_samples(
-    std::filesystem::path filename, int64_t start_row_group,
-    int64_t end_row_group, std::string property_name, size_t num_samples) {
+    std::filesystem::path filename, std::string property_name,
+    const std::vector<uint32_t>& patient_lengths, size_t num_samples) {
     std::vector<std::vector<char>> samples;
     size_t sample_count = 0;
 
-    iterate_primitive(filename, start_row_group, end_row_group, property_name,
+    iterate_primitive(filename, property_name, patient_lengths,
                       [&](std::vector<char> bytes) {
                           sample_count++;
 
@@ -1338,8 +1348,8 @@ std::vector<std::vector<char>> get_primitive_samples(
 }
 
 std::pair<size_t, std::vector<uint64_t>> write_primitive_files(
-    std::filesystem::path filename, int64_t start_row_group,
-    int64_t end_row_group, std::string property_name,
+    std::filesystem::path filename, std::string property_name,
+    const std::vector<uint32_t>& patient_lengths,
     const std::vector<char>& dictionary,
     std::filesystem::path target_filename) {
     std::vector<uint64_t> offsets;
@@ -1369,8 +1379,7 @@ std::pair<size_t, std::vector<uint64_t>> write_primitive_files(
     }
 
     iterate_primitive(
-        filename, start_row_group, end_row_group, property_name,
-        [&](std::vector<char> bytes) {
+        filename, property_name, patient_lengths, [&](std::vector<char> bytes) {
             std::vector<char> final_bytes(sizeof(uint32_t) +
                                           ZSTD_compressBound(bytes.size()));
             res = ZSTD_compress2(
@@ -1396,10 +1405,11 @@ std::pair<size_t, std::vector<uint64_t>> write_primitive_files(
     return std::make_pair(num_bytes, std::move(offsets));
 }
 
-void process_primitive_property(const std::string& property_name,
-                                std::filesystem::path temp_path,
-                                const std::vector<WorkEntry>& work_entries,
-                                int num_threads) {
+void process_primitive_property(
+    const std::string& property_name,
+    const std::vector<std::vector<uint32_t>>& patient_lengths,
+    std::filesystem::path temp_path, const std::vector<WorkEntry>& work_entries,
+    int num_threads) {
     std::filesystem::path string_path = temp_path / property_name;
     std::filesystem::create_directories(string_path);
 
@@ -1412,12 +1422,11 @@ void process_primitive_property(const std::string& property_name,
         (10 * 1000 + work_entries.size() - 1) / work_entries.size();
 
     run_all(work_entries, num_threads,
-            [&all_samples, &property_name, num_samples_per_entry](
-                std::filesystem::path path, size_t start_row, size_t end_row,
-                size_t index) {
-                all_samples[index] =
-                    get_primitive_samples(path, start_row, end_row,
-                                          property_name, num_samples_per_entry);
+            [&all_samples, &property_name, &patient_lengths,
+             num_samples_per_entry](std::filesystem::path path, size_t index) {
+                all_samples[index] = get_primitive_samples(
+                    path, property_name, patient_lengths[index],
+                    num_samples_per_entry);
             });
 
     std::vector<size_t> sample_sizes;
@@ -1455,13 +1464,12 @@ void process_primitive_property(const std::string& property_name,
         work_entries.size());
 
     run_all(work_entries, num_threads,
-            [&all_lengths, &string_path, &property_name, &dictionary](
-                std::filesystem::path path, size_t start_row, size_t end_row,
-                size_t index) {
+            [&all_lengths, &string_path, &property_name, &patient_lengths,
+             &dictionary](std::filesystem::path path, size_t index) {
                 std::filesystem::path target_path =
                     string_path / (std::to_string(index) + ".data");
                 all_lengths[index] = write_primitive_files(
-                    path, start_row, end_row, property_name, dictionary,
+                    path, property_name, patient_lengths[index], dictionary,
                     target_path);
             });
 
@@ -1482,8 +1490,7 @@ void process_primitive_property(const std::string& property_name,
     }
 
     run_all(work_entries, num_threads,
-            [&all_lengths](std::filesystem::path path, size_t start_row,
-                           size_t end_row, size_t index) {
+            [&all_lengths](std::filesystem::path path, size_t index) {
                 auto& item = all_lengths[index];
                 for (auto& val : item.second) {
                     val += item.first;
@@ -1497,7 +1504,7 @@ void process_primitive_property(const std::string& property_name,
                                                         std::ios_base::trunc);
 
     for (const auto& entry : work_entries) {
-        auto& item = all_lengths[std::get<3>(entry)];
+        auto& item = all_lengths[entry.second];
         ssize_t num_to_write = item.second.size() * sizeof(uint64_t);
         const char* buffer = (const char*)item.second.data();
         data_file.write(buffer, num_to_write);
@@ -1505,7 +1512,7 @@ void process_primitive_property(const std::string& property_name,
 
     for (const auto& entry : work_entries) {
         std::filesystem::path entry_path =
-            string_path / (std::to_string(std::get<3>(entry)) + ".data");
+            string_path / (std::to_string(entry.second) + ".data");
 
         std::ifstream entry_file(entry_path,
                                  std::ios_base::in | std::ios_base::binary);
@@ -1518,8 +1525,8 @@ void process_primitive_property(const std::string& property_name,
 
 std::tuple<uint32_t, std::vector<int64_t>, std::vector<uint32_t>,
            std::vector<uint64_t>>
-get_patient_ids(std::filesystem::path filename, int64_t start_row_group,
-                int64_t end_row_group, std::filesystem::path target_path) {
+get_patient_ids(std::filesystem::path filename,
+                std::filesystem::path target_path) {
     std::ofstream output_file(target_path, std::ios_base::out |
                                                std::ios_base::binary |
                                                std::ios_base::trunc);
@@ -1551,12 +1558,137 @@ get_patient_ids(std::filesystem::path filename, int64_t start_row_group,
     std::vector<int> columns = {(int)patient_id_column, (int)time_column};
 
     std::vector<int64_t> patient_ids;
+
+    std::vector<int64_t> unique_patient_ids;
     std::vector<uint32_t> lengths;
     std::vector<uint64_t> offsets;
 
     uint64_t num_bytes = 0;
 
-    for (int64_t row_group = start_row_group; row_group < end_row_group;
+    bool has_value = false;
+    size_t time_index = 0;
+    int64_t current_patient_id = 0;
+    size_t current_patient_length = 0;
+
+    constexpr int64_t micros_per_second = ((int64_t)1000) * 1000;
+    constexpr int64_t micros_per_day = micros_per_second * 24 * 60 * 60;
+
+    std::optional<int64_t> starting_timestamp = std::nullopt;
+
+    int64_t last_timestamp;
+
+    int64_t current_timestamp;
+    int64_t current_timestamp_count;
+
+    int64_t num_null_timestamps;
+
+    std::vector<uint32_t> values;
+
+    auto flush_timestamp = [&]() {
+        while (current_timestamp_count != 0) {
+            int64_t delta = current_timestamp - last_timestamp;
+
+            int64_t delta_days = delta / micros_per_day;
+            int64_t delta_seconds =
+                (delta % micros_per_day) / micros_per_second;
+            int64_t delta_micros = delta % micros_per_second;
+
+            if (delta_days < 0 || delta_seconds < 0 || delta_micros < 0) {
+                throw std::runtime_error("Times are not in order");
+            }
+
+            int64_t num_to_emit =
+                std::min(current_timestamp_count, (int64_t)15);
+
+            if (delta_seconds == 0 && delta_micros == 0) {
+                values.push_back((delta_days << 4) + num_to_emit);
+            } else if (delta_micros == 0) {
+                values.push_back((delta_days << 4));
+                values.push_back((delta_seconds << 4) + num_to_emit);
+            } else {
+                values.push_back((delta_days << 4));
+                values.push_back((delta_seconds << 4));
+                values.push_back((delta_micros << 4) + num_to_emit);
+            }
+
+            current_timestamp_count -= num_to_emit;
+
+            last_timestamp = current_timestamp;
+        }
+    };
+
+    auto flush_patient = [&]() {
+        flush_timestamp();
+
+        values[0] = num_null_timestamps;
+
+        std::vector<char> helper(
+            sizeof(int64_t) + sizeof(uint32_t) +
+            streamvbyte_max_compressedbytes(values.size()));
+        size_t count = streamvbyte_encode_0124(
+            values.data(), values.size(),
+            (uint8_t*)helper.data() + sizeof(uint32_t) + sizeof(int64_t));
+
+        int64_t* start_pointer = (int64_t*)(helper.data());
+        *start_pointer = *starting_timestamp;
+
+        uint32_t* length_pointer = (uint32_t*)(helper.data() + sizeof(int64_t));
+        *length_pointer = values.size();
+
+        helper.resize(sizeof(int64_t) + sizeof(uint32_t) + count);
+
+        unique_patient_ids.push_back(current_patient_id);
+        offsets.push_back(num_bytes);
+        lengths.push_back(current_patient_length);
+
+        num_bytes += helper.size();
+
+        output_file.write(helper.data(), helper.size());
+    };
+
+    auto add_time = [&](std::optional<int64_t> time) {
+        int64_t next_patient_id = patient_ids[time_index++];
+
+        if (!has_value || (next_patient_id != current_patient_id)) {
+            if (has_value) {
+                flush_patient();
+            } else {
+                has_value = true;
+            }
+            current_patient_id = next_patient_id;
+            current_patient_length = 0;
+
+            values.clear();
+            values.push_back(0);
+            starting_timestamp = std::nullopt;
+            num_null_timestamps = 0;
+        }
+
+        if (time == std::nullopt) {
+            if (starting_timestamp != std::nullopt) {
+                throw std::runtime_error(
+                    "Should only get null times at the start of a patient");
+            }
+            num_null_timestamps++;
+        } else {
+            if (starting_timestamp == std::nullopt) {
+                starting_timestamp = *time;
+                current_timestamp = *time;
+                current_timestamp_count = 1;
+                last_timestamp = *time;
+            } else if (*time == current_timestamp) {
+                current_timestamp_count++;
+            } else {
+                flush_timestamp();
+                current_timestamp = *time;
+                current_timestamp_count = 1;
+            }
+        }
+
+        current_patient_length++;
+    };
+
+    for (int64_t row_group = 0; row_group < arrow_reader->num_row_groups();
          row_group++) {
         std::shared_ptr<arrow::Table> table;
         PARQUET_THROW_NOT_OK(
@@ -1583,27 +1715,15 @@ get_patient_ids(std::filesystem::path filename, int64_t start_row_group,
             }
         }
 
-        auto chunked_events = table->GetColumnByName("events");
+        auto chunked_time = table->GetColumnByName("time");
 
-        if (chunked_events == nullptr) {
+        if (chunked_time == nullptr) {
             throw std::runtime_error("Could not get column");
         }
 
-        for (const auto& event_chunk : chunked_events->chunks()) {
-            auto events =
-                std::dynamic_pointer_cast<arrow::ListArray>(event_chunk);
-            if (events == nullptr) {
-                throw std::runtime_error("Could not cast events");
-            }
-
-            auto event =
-                std::dynamic_pointer_cast<arrow::StructArray>(events->values());
-            if (event == nullptr) {
-                throw std::runtime_error("Could not cast event");
-            }
-
-            auto time_array = std::dynamic_pointer_cast<arrow::TimestampArray>(
-                event->GetFieldByName("time"));
+        for (const auto& array : chunked_time->chunks()) {
+            auto time_array =
+                std::dynamic_pointer_cast<arrow::TimestampArray>(array);
             if (time_array == nullptr) {
                 throw std::runtime_error("Could not find property");
             }
@@ -1619,133 +1739,39 @@ get_patient_ids(std::filesystem::path filename, int64_t start_row_group,
                 throw std::runtime_error("Need an empty timezone");
             }
 
-            for (int64_t i = 0; i < events->length(); i++) {
-                if (!events->IsValid(i)) {
-                    throw std::runtime_error("Missing events?");
+            for (int64_t i = 0; i < time_array->length(); i++) {
+                if (time_array->IsNull(i)) {
+                    add_time(std::nullopt);
+                } else {
+                    add_time(time_array->Value(i));
                 }
-
-                if (events->value_length(i) == 0) {
-                    throw std::runtime_error("Zero events for patient?");
-                }
-
-                int64_t starting_index = events->value_offset(i);
-                if (time_array->IsNull(starting_index)) {
-                    throw std::runtime_error("First time is not valid?");
-                }
-
-                constexpr int64_t micros_per_second = ((int64_t)1000) * 1000;
-                constexpr int64_t micros_per_day =
-                    micros_per_second * 24 * 60 * 60;
-
-                int64_t starting_timestamp = time_array->Value(starting_index);
-
-                int64_t last_timestamp = starting_timestamp;
-
-                int64_t current_timestamp = starting_timestamp;
-                int64_t current_timestamp_count = 1;
-
-                std::vector<uint32_t> values;
-
-                auto flush_timestamp = [&]() {
-                    while (current_timestamp_count != 0) {
-                        int64_t delta = current_timestamp - last_timestamp;
-
-                        int64_t delta_days = delta / micros_per_day;
-                        int64_t delta_seconds =
-                            (delta % micros_per_day) / micros_per_second;
-                        int64_t delta_micros = delta % micros_per_second;
-
-                        if (delta_days < 0 || delta_seconds < 0 ||
-                            delta_micros < 0) {
-                            throw std::runtime_error("Times are not in order");
-                        }
-
-                        int64_t num_to_emit =
-                            std::min(current_timestamp_count, (int64_t)15);
-
-                        if (delta_seconds == 0 && delta_micros == 0) {
-                            values.push_back((delta_days << 4) + num_to_emit);
-                        } else if (delta_micros == 0) {
-                            values.push_back((delta_days << 4));
-                            values.push_back((delta_seconds << 4) +
-                                             num_to_emit);
-                        } else {
-                            values.push_back((delta_days << 4));
-                            values.push_back((delta_seconds << 4));
-                            values.push_back((delta_micros << 4) + num_to_emit);
-                        }
-
-                        current_timestamp_count -= num_to_emit;
-
-                        last_timestamp = current_timestamp;
-                    }
-                };
-
-                for (int64_t j = starting_index + 1;
-                     j < starting_index + events->value_length(i); j++) {
-                    if (event->IsNull(j) || time_array->IsNull(j)) {
-                        throw std::runtime_error("Null time");
-                    }
-
-                    auto val = time_array->Value(j);
-
-                    if (val == current_timestamp) {
-                        current_timestamp_count++;
-                    } else {
-                        flush_timestamp();
-                        current_timestamp = val;
-                        current_timestamp_count = 1;
-                    }
-                }
-
-                flush_timestamp();
-
-                std::vector<char> helper(
-                    sizeof(int64_t) + sizeof(uint32_t) +
-                    streamvbyte_max_compressedbytes(values.size()));
-                size_t count = streamvbyte_encode_0124(
-                    values.data(), values.size(),
-                    (uint8_t*)helper.data() + sizeof(uint32_t) +
-                        sizeof(int64_t));
-
-                int64_t* start_pointer = (int64_t*)(helper.data());
-                *start_pointer = starting_timestamp;
-
-                uint32_t* length_pointer =
-                    (uint32_t*)(helper.data() + sizeof(int64_t));
-                *length_pointer = values.size();
-
-                helper.resize(sizeof(int64_t) + sizeof(uint32_t) + count);
-
-                offsets.push_back(num_bytes);
-                lengths.push_back(events->value_length(i));
-
-                num_bytes += helper.size();
-
-                output_file.write(helper.data(), helper.size());
             }
         }
     }
 
-    return {num_bytes, std::move(patient_ids), std::move(lengths),
+    if (has_value) {
+        flush_patient();
+    }
+
+    return {num_bytes, std::move(unique_patient_ids), std::move(lengths),
             std::move(offsets)};
 }
 
-void process_patient_id_and_time(std::filesystem::path temp_path,
-                                 const std::vector<WorkEntry>& work_entries,
-                                 int num_threads) {
+std::pair<std::vector<std::vector<uint32_t>>, uint32_t> process_patient_id_and_time(
+    std::filesystem::path temp_path, const std::vector<WorkEntry>& work_entries,
+    int num_threads) {
     std::vector<std::tuple<uint32_t, std::vector<int64_t>,
                            std::vector<uint32_t>, std::vector<uint64_t>>>
         all_lengths(work_entries.size());
 
+    std::vector<std::vector<uint32_t>> result_lengths(work_entries.size());
+
     run_all(
         work_entries, num_threads,
-        [&temp_path, &all_lengths](std::filesystem::path path, size_t start_row,
-                                   size_t end_row, size_t index) {
+        [&temp_path, &all_lengths](std::filesystem::path path, size_t index) {
             std::filesystem::path target_path =
                 temp_path / (std::to_string(index) + ".data");
-            all_lengths[index] =
-                get_patient_ids(path, start_row, end_row, target_path);
+            all_lengths[index] = get_patient_ids(path, target_path);
         });
 
     size_t num_patients = 0;
@@ -1765,8 +1791,7 @@ void process_patient_id_and_time(std::filesystem::path temp_path,
     }
 
     run_all(work_entries, num_threads,
-            [&all_lengths](std::filesystem::path path, size_t start_row,
-                           size_t end_row, size_t index) {
+            [&all_lengths](std::filesystem::path path, size_t index) {
                 auto& item = all_lengths[index];
                 for (auto& val : std::get<3>(item)) {
                     val += std::get<0>(item);
@@ -1780,7 +1805,7 @@ void process_patient_id_and_time(std::filesystem::path temp_path,
             temp_path / "patient_id",
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
         std::ofstream lengths_file(
-            temp_path / "length",
+            temp_path / "meds_reader.length",
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 
         std::ofstream data_file(
@@ -1790,7 +1815,7 @@ void process_patient_id_and_time(std::filesystem::path temp_path,
         absl::flat_hash_set<int64_t> seen_patient_ids;
 
         for (const auto& entry : work_entries) {
-            const auto& item = all_lengths[std::get<3>(entry)];
+            auto& item = all_lengths[entry.second];
             pids_file.write((const char*)std::get<1>(item).data(),
                             sizeof(int64_t) * std::get<1>(item).size());
             for (int64_t pid : std::get<1>(item)) {
@@ -1807,10 +1832,12 @@ void process_patient_id_and_time(std::filesystem::path temp_path,
             const char* buffer = (const char*)std::get<3>(item).data();
 
             data_file.write(buffer, num_to_write);
+
+            result_lengths[entry.second] = std::move(std::get<2>(item));
         }
 
         for (const auto& entry : work_entries) {
-            size_t index = std::get<3>(entry);
+            size_t index = entry.second;
 
             std::filesystem::path entry_path =
                 temp_path / (std::to_string(index) + ".data");
@@ -1826,12 +1853,17 @@ void process_patient_id_and_time(std::filesystem::path temp_path,
         char nonsense_buffer[STREAMVBYTE_PADDING] = "PADDING";
         data_file.write(nonsense_buffer, STREAMVBYTE_PADDING);
     }
+
+    return {result_lengths, num_patients};
 }
 
 DataType convert_to_datatype(const std::shared_ptr<arrow::DataType>& type) {
     switch (type->id()) {
         case arrow::Type::STRING:
             return DataType::STRING;
+
+        case arrow::Type::LARGE_STRING:
+            return DataType::LARGE_STRING;
 
         case arrow::Type::TIMESTAMP:
             return DataType::TIMESTAMP;
@@ -1870,13 +1902,15 @@ DataType convert_to_datatype(const std::shared_ptr<arrow::DataType>& type) {
 
 void process_property(const std::string& property_name,
                       const std::shared_ptr<arrow::DataType>& type,
-                      std::filesystem::path temp_path,
+                      const std::vector<std::vector<uint32_t>>& patient_lengths,
+                      const std::filesystem::path& temp_path,
                       const std::vector<WorkEntry>& work_entries,
                       int num_threads) {
     switch (type->id()) {
         case arrow::Type::STRING:
-            process_string_property(property_name, temp_path, work_entries,
-                                    num_threads);
+        case arrow::Type::LARGE_STRING:
+            process_string_property(property_name, type, patient_lengths,
+                                    temp_path, work_entries, num_threads);
             return;
 
         case arrow::Type::TIMESTAMP:
@@ -1890,8 +1924,8 @@ void process_property(const std::string& property_name,
         case arrow::Type::UINT16:
         case arrow::Type::UINT32:
         case arrow::Type::UINT64:
-            process_primitive_property(property_name, temp_path, work_entries,
-                                       num_threads);
+            process_primitive_property(property_name, patient_lengths,
+                                       temp_path, work_entries, num_threads);
             return;
 
         default:
@@ -1900,6 +1934,15 @@ void process_property(const std::string& property_name,
 
     // Unreachable
     abort();
+}
+
+template <typename T>
+void process_null_maps(const std::map<std::string, std::shared_ptr<arrow::DataType>>& properties, 
+    const std::filesystem::path& destination_path, int num_threads, int num_patients) {
+
+    
+
+
 }
 
 }  // namespace
@@ -1911,8 +1954,13 @@ void create_database(const char* source, const char* destination,
 
     std::filesystem::create_directory(destination_path);
 
-    std::filesystem::copy(source_path / "metadata.json",
-                          destination_path / "metadata.json");
+    {  
+        std::ofstream version_file(destination_path / "meds_reader.version");
+        version_file << CURRENT_BINARY_VERSION << std::endl;
+    }
+    
+    std::filesystem::copy(source_path / "metadata",
+                          destination_path / "metadata");
 
     auto data = read_files(source_path / "data", num_threads);
 
@@ -1922,7 +1970,7 @@ void create_database(const char* source, const char* destination,
 
     {
         std::ofstream property_file(
-            destination_path / "properties",
+            destination_path / "meds_reader.properties",
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 
         for (const auto& property : properties) {
@@ -1941,7 +1989,11 @@ void create_database(const char* source, const char* destination,
         }
     }
 
-    process_patient_id_and_time(destination_path, work_entries, num_threads);
+    auto patient_lengths_and_num_patients = process_patient_id_and_time(
+        destination_path, work_entries, num_threads);
+
+    const auto& patient_lengths = patient_lengths_and_num_patients.first;
+    const auto& num_patients = patient_lengths_and_num_patients.second;
 
     for (const auto& property : properties) {
         if (property.first == "patient_id" || property.first == "time") {
@@ -1950,7 +2002,19 @@ void create_database(const char* source, const char* destination,
 
         std::cout << "Processing " << property.first << std::endl;
 
-        process_property(property.first, property.second, destination_path,
-                         work_entries, num_threads);
+        process_property(property.first, property.second, patient_lengths,
+                         destination_path, work_entries, num_threads);
+    }
+
+    if (properties.size() > 64) {
+        throw std::runtime_error("Too many properties");
+    } else if (properties.size() > 32) {
+        process_null_maps<uint64_t>(properties, destination_path, num_threads, num_patients);
+    } else if (properties.size() > 16) {
+        process_null_maps<uint32_t>(properties, destination_path, num_threads, num_patients);
+    } else if (properties.size() > 8) {
+        process_null_maps<uint16_t>(properties, destination_path, num_threads, num_patients);
+    } else {
+        process_null_maps<uint8_t>(properties, destination_path, num_threads, num_patients);
     }
 }

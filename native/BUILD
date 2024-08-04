@@ -21,7 +21,13 @@ cc_library(
         "@concurrentqueue",
         ":zstd",
         ":streamvbyte",
+        ":binary_version",
     ],
+)
+
+cc_library(
+    name="binary_version",
+    hdrs=["binary_version.hh"],
 )
 
 cc_library(
@@ -94,6 +100,7 @@ pybind_extension(
         ":dtype",
         ":property_reader",
         ":fast_shared_ptr",
+        ":binary_version",
     ],
 )
 

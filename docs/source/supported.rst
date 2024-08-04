@@ -26,6 +26,7 @@ However, meds_reader currently only supports some pyarrow types.
 
 The following types are currently supported:
    - :python:`pyarrow.string()`
+   - :python:`pyarrow.large_string()`
    - :python:`pyarrow.timestamp('us')`
    - :python:`pyarrow.float32()`
    - :python:`pyarrow.float64()`

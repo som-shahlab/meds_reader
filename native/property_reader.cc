@@ -355,7 +355,10 @@ struct TimePropertyReader : PropertyReader {
             result.emplace_back(std::move(dt));
         };
 
-        size_t value_index = 0;
+        uint32_t num_null = values[0];
+        result.resize(num_null);
+
+        size_t value_index = 1;
         while (result.size() < (size_t)length) {
             uint32_t days_val = values[value_index++];
             uint32_t days_delta = days_val >> 4;
@@ -508,10 +511,10 @@ std::unique_ptr<PropertyReader> make_primitive_reader(
 PyObject* create_datetime(int64_t offset) {
     absl::CivilSecond day(1970, 1, 1);
 
-    uint64_t microseconds_per_second = (uint64_t)(1000 * 1000);
+    int64_t microseconds_per_second = (int64_t)(1000 * 1000);
 
     day += offset / microseconds_per_second;
-    uint64_t microseconds = offset % microseconds_per_second;
+    int64_t microseconds = offset % microseconds_per_second;
 
     PyObjectWrapper dt{PyDateTime_FromDateAndTime(
         day.year(), day.month(), day.day(), day.hour(), day.minute(),
@@ -527,6 +530,9 @@ std::pair<const char*, const char*> get_pyarrow_arguments(DataType type) {
     switch (type) {
         case DataType::STRING:
             return {"string", nullptr};
+
+        case DataType::LARGE_STRING:
+            return {"large_string", nullptr};
 
         case DataType::TIMESTAMP:
             return {"timestamp", "us"};
@@ -568,6 +574,7 @@ std::unique_ptr<PropertyReader> create_property_reader(
 
     switch (property_type) {
         case DataType::STRING:
+        case DataType::LARGE_STRING:
             return std::make_unique<StringPropertyReader>(property_path);
 
         case DataType::TIMESTAMP:

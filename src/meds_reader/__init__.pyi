@@ -20,9 +20,6 @@ class PatientDatabase:
     path_to_database: str
     "The path to the database object"
 
-    metadata: meds.DatasetMetadata
-    "The MEDS dataset metadata"
-
     properties: Mapping[str, pa.DataType]
     "The per-event properties for this dataset"
 
@@ -72,6 +69,10 @@ class Event:
 
     def __getattr__(self, name: str) -> Any:
         """Events can contain arbitrary additional properties. This retrieves the specified property, or returns None"""
+        ...
+
+    def __iter__(self) -> Iterator[Tuple[str, Any]]:
+        """Iterate through the non-null properties for this type."""
         ...
 
 __all__ = ["PatientDatabase", "Patient", "Event"]

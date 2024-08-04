@@ -7,6 +7,7 @@ import pickle
 import shutil
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
 import os
+import glob
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -71,45 +72,32 @@ class MutableEvent:
         return self.properties == other.properties
 
 
-def _convert_dict_to_patient(patient_dict: Mapping[str, Any]) -> MutablePatient:
+def _convert_dict_to_patient(
+    patient_id, events: List[Mapping[str, Any]]
+) -> MutablePatient:
     def create_event(event_dict: Mapping[str, Any]) -> MutableEvent:
         time = event_dict["time"]
         code = event_dict["code"]
-        properties = {
-            k: v
-            for k, v in event_dict.items()
-            if k not in ("time", "code", "properties")
-        }
-        for k, v in (event_dict.get("properties") or {}).items():
-            properties[k] = v
+        properties = {k: v for k, v in event_dict.items() if k not in ("time", "code")}
         return MutableEvent(time, code, properties)
 
     return MutablePatient(
-        patient_id=patient_dict["patient_id"],
-        events=[create_event(event_dict) for event_dict in patient_dict["events"]],
+        patient_id=patient_id,
+        events=[create_event(event_dict) for event_dict in events],
     )
 
 
-def _convert_patient_to_dict(patient: MutablePatient) -> Mapping[str, Any]:
-    known_properties = ["datetime_value", "numeric_value", "text_value", "time", "code"]
-
+def _convert_patient_to_dict(patient: MutablePatient) -> List[Mapping[str, Any]]:
     def create_event(event: MutableEvent) -> Mapping[str, Any]:
-        result = {}
-        for k in known_properties:
-            if getattr(event, k, None) is not None:
-                result[k] = getattr(event, k)
-
-        result["properties"] = {k: v for k, v in event if k not in known_properties}
+        result = {k: v for k, v in event}
+        result["patient_id"] = patient.patient_id
         return result
 
-    return {
-        "patient_id": patient.patient_id,
-        "events": [create_event(event) for event in patient.events],
-    }
+    return [create_event(event) for event in patient.events]
 
 
 def _transform_meds_dataset_worker(
-    work_queue: multiprocessing.SimpleQueue[Optional[Tuple[str, int, int]]],
+    work_queue: multiprocessing.SimpleQueue[Optional[str]],
     transform_func_pkl: bytes,
     out_path: str,
     schema: pa.Schema,
@@ -122,18 +110,46 @@ def _transform_meds_dataset_worker(
         item = work_queue.get()
         if item is None:
             return
-        source_path, start_index, end_index = item
+        source_path = item
         reader = pq.ParquetFile(source_path)
-        for row_group in range(start_index, end_index):
-            new_patients = []
-            original_table = reader.read_row_group(row_group)
-            for patient_dict in original_table.to_pylist():
-                patient = _convert_dict_to_patient(patient_dict)
-                updated_patient = transform_func(patient)
-                if updated_patient is not None:
-                    new_patients.append(_convert_patient_to_dict(updated_patient))
 
-            new_table = pa.Table.from_pylist(new_patients, schema=schema)
+        current_patient_id = None
+        current_events = None
+
+        transformed_events = []
+
+        def flush_patient():
+            assert current_patient_id is not None
+            assert current_events is not None
+            patient = _convert_dict_to_patient(current_patient_id, current_events)
+
+            updated_patient = transform_func(patient)
+            if updated_patient is not None:
+                print("Transform", patient, _convert_patient_to_dict(updated_patient))
+                transformed_events.extend(_convert_patient_to_dict(updated_patient))
+
+        for row_group in range(0, reader.num_row_groups):
+            original_table = reader.read_row_group(row_group)
+            for event_dict in original_table.to_pylist():
+                if (
+                    current_patient_id is None
+                    or event_dict["patient_id"] != current_patient_id
+                ):
+                    if current_patient_id is not None:
+                        flush_patient()
+
+                    current_patient_id = event_dict["patient_id"]
+                    current_events = []
+
+                assert current_events is not None
+                current_events.append(event_dict)
+
+            if row_group == reader.num_row_groups - 1:
+                if current_patient_id is not None:
+                    flush_patient()
+
+            print(transformed_events)
+            new_table = pa.Table.from_pylist(transformed_events, schema=schema)
             writer.write_table(new_table)
 
 
@@ -145,43 +161,32 @@ def transform_meds_dataset(
 ):
     """Transform a MEDS dataset using the provided transform_func"""
     os.mkdir(target_dataset_path)
-    shutil.copyfile(
-        os.path.join(source_dataset_path, "metadata.json"),
-        os.path.join(target_dataset_path, "metadata.json"),
+    shutil.copytree(
+        os.path.join(source_dataset_path, "metadata"),
+        os.path.join(target_dataset_path, "metadata"),
     )
 
-    source_parquet_files = [
-        os.path.join(source_dataset_path, "data", a)
-        for a in os.listdir(os.path.join(source_dataset_path, "data"))
-    ]
-    row_groups_per_file = {}
-    total_row_groups = 0
+    source_parquet_files = list(
+        glob.glob(
+            os.path.join(source_dataset_path, "data", "**", "*.parquet"), recursive=True
+        )
+    )
+
+    assert len(source_parquet_files) > 0
 
     schema: Optional[pa.Schema] = None
 
     for file in source_parquet_files:
         reader = pq.ParquetFile(file)
-        row_groups_per_file[file] = reader.num_row_groups
-        total_row_groups += reader.num_row_groups
 
         if schema is None:
             schema = reader.schema_arrow
         else:
             assert schema == reader.schema_arrow
 
-    row_groups_per_thread = (total_row_groups + num_threads - 1) // num_threads
-
-    work_queue: multiprocessing.SimpleQueue[Optional[Tuple[str, int, int]]] = (
-        mp.SimpleQueue()
-    )
+    work_queue: multiprocessing.SimpleQueue[Optional[str]] = mp.SimpleQueue()
     for file in source_parquet_files:
-        current_row_group = 0
-        while current_row_group < row_groups_per_file[file]:
-            end = min(
-                current_row_group + row_groups_per_thread, row_groups_per_file[file]
-            )
-            work_queue.put((file, current_row_group, end))
-            current_row_group = end
+        work_queue.put(file)
 
     for _ in range(num_threads):
         work_queue.put(None)

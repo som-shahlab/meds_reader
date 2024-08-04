@@ -13,6 +13,8 @@ import pyarrow.parquet as pq
 import pyarrow as pa
 import argparse
 import random
+import glob
+import collections
 
 from typing import (
     List,
@@ -55,29 +57,21 @@ def meds_reader_verify():
 
     random.seed(3452342)
 
-    files = sorted(os.listdir(os.path.join(args.meds_dataset, "data")))
+    files = sorted(
+        glob.glob(
+            os.path.join(args.meds_dataset, "data", "**", "*.parquet"), recursive=True
+        )
+    )
 
     file = random.choice(files)
-    reference = pq.ParquetFile(os.path.join(args.meds_dataset, "data", file))
+    reference = pq.ParquetFile(file)
 
     row_group = reference.read_row_group(
         random.randint(0, reference.num_row_groups - 1)
     )
 
-    events = row_group.schema.field("events").type.value_type
-    properties = events.field("properties").type
-
-    all_properties = {}
-
-    for i in range(events.num_fields):
-        f = events.field(i)
-        all_properties[f.name] = f.type
-
-    for i in range(properties.num_fields):
-        f = properties.field(i)
-        all_properties[f.name] = f.type
-
-    del all_properties["properties"]
+    custom_fields = sorted(set(row_group.schema.names) - {"patient_id"})
+    all_properties = {k: row_group.schema.field(k).type for k in custom_fields}
 
     missing = set(all_properties) - set(database.properties)
     extra = set(database.properties) - set(all_properties)
@@ -87,22 +81,22 @@ def meds_reader_verify():
 
     assert all_properties == database.properties
 
-    num_patients = row_group.shape[0]
+    python_objects = row_group.to_pylist()
 
-    random_indices = random.sample(list(range(num_patients)), min([num_patients, 200]))
+    patient_objects = collections.defaultdict(list)
 
-    row_group_sample = row_group.take(random_indices)
-
-    python_objects = row_group_sample.to_pylist()
+    for obj in python_objects:
+        patient_id = obj["patient_id"]
+        del obj["patient_id"]
+        patient_objects[patient_id].append(obj)
 
     def assert_same(pyarrow_patient, reader_patient):
-        assert pyarrow_patient["patient_id"] == reader_patient.patient_id
 
-        assert len(pyarrow_patient["events"]) == len(reader_patient.events)
+        assert len(pyarrow_patient) == len(
+            reader_patient.events
+        ), f"{len(pyarrow_patient)} {len(reader_patient.events)}"
 
-        for pyarrow_event, reader_event in zip(
-            pyarrow_patient["events"], reader_patient.events
-        ):
+        for pyarrow_event, reader_event in zip(pyarrow_patient, reader_patient.events):
             for property in database.properties:
                 actual = getattr(reader_event, property)
                 if property in pyarrow_event:
@@ -112,10 +106,10 @@ def meds_reader_verify():
 
                 assert (
                     actual == expected
-                ), f"Got {actual} expected {expected} for {reader_patient} {pyarrow_event['time']} {reader_event.time}"
+                ), f"Got {actual} expected {expected} for {reader_patient} {property} {pyarrow_event['time']} {reader_event.time}"
 
-    for pyarrow_patient in python_objects:
-        reader_patient = database[pyarrow_patient["patient_id"]]
+    for patient_id, pyarrow_patient in patient_objects.items():
+        reader_patient = database[patient_id]
 
         assert_same(pyarrow_patient, reader_patient)
 
@@ -176,10 +170,6 @@ class _PatientDatabaseWrapper:
         self.path_to_database = db.path_to_database
 
     @property
-    def metadata(self):
-        return self._db.metadata
-
-    @property
     def properties(self):
         return self._db.properties
 
@@ -215,7 +205,7 @@ class PatientDatabase:
 
         if num_threads != 1:
             self._processes: Optional[List[SpawnProcess]] = []
-            self._num_threads = 1
+            self._num_threads = num_threads
 
             self._input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]] = (
                 mp.SimpleQueue()
@@ -235,10 +225,6 @@ class PatientDatabase:
                 self._processes.append(process)
 
         self.path_to_database = path_to_database
-
-    @property
-    def metadata(self):
-        return self._database.metadata
 
     @property
     def properties(self):

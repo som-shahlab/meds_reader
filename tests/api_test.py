@@ -19,7 +19,9 @@ def meds_dataset(tmpdir: str):
 
     os.mkdir(meds_dir)
 
-    with open(os.path.join(meds_dir, "metadata.json"), "w") as f:
+    os.mkdir(os.path.join(meds_dir, "metadata"))
+
+    with open(os.path.join(meds_dir, "metadata", "dataset.json"), "w") as f:
         json.dump(metadata, f)
 
     data_dir = os.path.join(meds_dir, "data")
@@ -28,50 +30,46 @@ def meds_dataset(tmpdir: str):
     entries = [
         {
             "patient_id": 32,
-            "events": [
-                {
-                    "time": datetime.datetime(2012, 10, 2),
-                    "code": "Whatever",
-                    "properties": {"other": "need", "numeric": 38},
-                },
-                {
-                    "time": datetime.datetime(2013, 10, 2),
-                    "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
-                    "code": "Whatever2",
-                },
-            ],
+            "time": datetime.datetime(2012, 10, 2),
+            "code": "Whatever",
+            "other": "need",
+            "numeric": 38,
+        },
+        {
+            "patient_id": 32,
+            "time": datetime.datetime(2013, 10, 2),
+            "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
+            "code": "Whatever2",
         },
         {
             "patient_id": 64,
-            "events": [
-                {
-                    "time": datetime.datetime(2012, 10, 2),
-                    "code": "Whatever",
-                    "properties": {"other": "need", "numeric": 38},
-                },
-                {
-                    "time": datetime.datetime(2013, 10, 2),
-                    "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
-                    "code": "Whatever2",
-                },
-                {
-                    "time": datetime.datetime(2013, 10, 2),
-                    "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
-                    "code": "Whatever3",
-                },
-            ],
+            "time": datetime.datetime(2012, 10, 2),
+            "code": "Whatever",
+            "other": "need",
+            "numeric": 38,
+        },
+        {
+            "patient_id": 64,
+            "time": datetime.datetime(2013, 10, 2),
+            "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
+            "code": "Whatever2",
+        },
+        {
+            "patient_id": 64,
+            "time": datetime.datetime(2013, 10, 2),
+            "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
+            "code": "Whatever3",
         },
     ]
 
-    custom_properties = pa.struct(
-        [
-            ("other", pa.string()),
-            ("numeric", pa.float32()),
-        ]
-    )
+    custom_properties = [
+        ("datetime_value", pa.timestamp("us")),
+        ("other", pa.string()),
+        ("numeric", pa.float32()),
+    ]
 
     table = pa.Table.from_pylist(
-        entries, schema=meds.schema.patient_schema(custom_properties)
+        entries, schema=meds.schema.data_schema(custom_properties)
     )
 
     pq.write_table(table, os.path.join(data_dir, "entries.parquet"))
@@ -92,7 +90,11 @@ def patient_database(tmpdir: str, meds_dataset: str):
 
 
 def test_metadata(patient_database):
-    assert patient_database.metadata == metadata
+    with open(
+        os.path.join(patient_database.path_to_database, "metadata", "dataset.json")
+    ) as f:
+        loaded_metadata = json.load(f)
+    assert loaded_metadata == metadata
 
 
 def test_size(patient_database):
@@ -115,7 +117,6 @@ def test_properties(patient_database):
         "datetime_value": pa.timestamp("us"),
         "numeric_value": pa.float32(),
         "other": pa.string(),
-        "text_value": pa.string(),
         "time": pa.timestamp("us"),
         "numeric": pa.float32(),
     }

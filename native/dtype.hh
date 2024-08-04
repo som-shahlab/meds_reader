@@ -4,21 +4,23 @@
 
 enum class DataType : uint64_t {
     STRING = 0,
-    TIMESTAMP = 1,
+    LARGE_STRING = 1,
+
+    TIMESTAMP = 2,
 
     // BOOL = 2,
 
     // FLOAT16 = 3,
-    FLOAT32 = 4,
-    FLOAT64 = 5,
+    FLOAT32 = 3,
+    FLOAT64 = 4,
 
-    INT8 = 6,
-    INT16 = 7,
-    INT32 = 8,
-    INT64 = 9,
+    INT8 = 5,
+    INT16 = 6,
+    INT32 = 7,
+    INT64 = 8,
 
-    UINT8 = 10,
-    UINT16 = 11,
-    UINT32 = 12,
-    UINT64 = 13,
+    UINT8 = 9,
+    UINT16 = 10,
+    UINT32 = 11,
+    UINT64 = 12,
 };

@@ -4,6 +4,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <datetime.h>
+#include <fstream>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_cat.h"
@@ -14,6 +15,7 @@
 #include "perfect_hash.hh"
 #include "property_reader.hh"
 #include "pyutils.hh"
+#include "binary_version.hh"
 
 namespace {
 
@@ -37,7 +39,6 @@ struct PatientDatabase : public PyObject,
     static PyObject* create(PyTypeObject* type, PyObject* args, PyObject* kwds);
 
     PyObject* get_properties(void*);
-    PyObject* get_metadata(void*);
     Py_ssize_t length();
     __attribute__((always_inline)) PyObject* subscript(PyObject* patient_id);
     PyObject* reduce(PyObject* Py_UNUSED(unused));
@@ -62,7 +63,6 @@ struct PatientDatabase : public PyObject,
     std::optional<absl::flat_hash_map<int64_t, int32_t>> patient_offset_map;
 
     PyObjectWrapper py_properties;
-    PyObjectWrapper py_metadata;
 };
 
 PyMappingMethods PatientDatabaseMappingMethods = {
@@ -73,8 +73,6 @@ PyMappingMethods PatientDatabaseMappingMethods = {
 PyGetSetDef PatientDatabaseGetSet[] = {
     {.name = "properties",
      .get = convert_to_cfunc<&PatientDatabase::get_properties>()},
-    {.name = "metadata",
-     .get = convert_to_cfunc<&PatientDatabase::get_metadata>()},
     {nullptr},
 };
 
@@ -421,7 +419,7 @@ PyObject* Event::str() {
 PatientDatabase::PatientDatabase(std::string_view dir)
     : root_directory(dir),
       patient_id_file(root_directory / "patient_id"),
-      length_file(root_directory / "length") {
+      length_file(root_directory / "meds_reader.length") {
     {
         PyObject_Init(static_cast<PyObject*>(this), &Type);
         PyObjectWrapper pyarrow{PyImport_ImportModule("pyarrow")};
@@ -429,14 +427,23 @@ PatientDatabase::PatientDatabase(std::string_view dir)
             throw std::runtime_error("Could not import pyarrow");
         }
 
-        MmapFile property_file(root_directory / "properties");
+        {
+            std::ifstream version_file(root_directory / "meds_reader.version");
+            int version;
+            version_file >> version;
+
+            if (version != CURRENT_BINARY_VERSION) {
+                throw std::runtime_error("The file you are trying to read has a binary version of " + std::to_string(version) + " while this version of meds_reader only supports binary version " + std::to_string(CURRENT_BINARY_VERSION));
+            }
+        }
+
+        MmapFile property_file(root_directory / "meds_reader.properties");
 
         std::string_view current = property_file.bytes();
 
         std::vector<PyObject*> property_names;
 
         py_properties = PyDict_New();
-        py_metadata = nullptr;
 
         while (current.size() != 0) {
             size_t next_size = *((size_t*)current.data());
@@ -528,20 +535,6 @@ std::optional<int32_t> PatientDatabase::get_patient_offset(int64_t patient_id) {
 
 PyObject* PatientDatabase::get_properties(void*) {
     return py_properties.copy();
-}
-
-PyObject* PatientDatabase::get_metadata(void*) {
-    if (py_metadata.borrow() == nullptr) {
-        MmapFile metadata_file(root_directory / "metadata.json");
-        PyObjectWrapper json{PyImport_ImportModule("json")};
-        PyObjectWrapper loads{PyUnicode_FromString("loads")};
-        PyObjectWrapper metadata_string{PyUnicode_FromStringAndSize(
-            metadata_file.bytes().data(), metadata_file.bytes().size())};
-        py_metadata = PyObject_CallMethodOneArg(json.borrow(), loads.borrow(),
-                                                metadata_string.borrow());
-    }
-
-    return py_metadata.copy();
 }
 
 PyObject* PatientDatabase::create(PyTypeObject* type, PyObject* args,
