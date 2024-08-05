@@ -31,4 +31,4 @@ Python Module
 
 .. autoclass:: Event
     :members:
-    :special-members: __getattr__
+    :special-members: __getattr__, __iter__

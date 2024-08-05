@@ -22,6 +22,7 @@ cc_library(
         ":zstd",
         ":streamvbyte",
         ":binary_version",
+        ":mmap_file",
     ],
 )
 

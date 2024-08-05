@@ -30,7 +30,7 @@ def meds_dataset(tmpdir: str):
     entries = [
         {
             "patient_id": 32,
-            "time": datetime.datetime(2012, 10, 2),
+            "time": None,
             "code": "Whatever",
             "other": "need",
             "numeric": 38,
@@ -38,6 +38,12 @@ def meds_dataset(tmpdir: str):
         {
             "patient_id": 32,
             "time": datetime.datetime(2013, 10, 2),
+            "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
+            "code": "Whatever2",
+        },
+        {
+            "patient_id": 32,
+            "time": datetime.datetime(2019, 12, 2),
             "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
             "code": "Whatever2",
         },
@@ -135,12 +141,12 @@ def test_lookup(patient_database):
 
     assert p.patient_id == 32
 
-    assert len(p.events) == 2
+    assert len(p.events) == 3
 
     assert p.events[0].code == "Whatever"
     assert p.events[1].code == "Whatever2"
 
-    assert p.events[0].time == datetime.datetime(2012, 10, 2)
+    assert p.events[0].time == None
     assert p.events[1].time == datetime.datetime(2013, 10, 2)
 
     assert p.events[0].other == "need"
@@ -151,6 +157,17 @@ def test_lookup(patient_database):
 
     assert p.events[0].datetime_value is None
     assert p.events[1].datetime_value == datetime.datetime(1999, 4, 2, 2, 4, 29, 999999)
+
+    assert set(p.events[0]) == {
+        ("code", "Whatever"),
+        ("numeric", 38),
+        ("other", "need"),
+    }
+    assert set(p.events[1]) == {
+        ("code", "Whatever2"),
+        ("time", datetime.datetime(2013, 10, 2)),
+        ("datetime_value", datetime.datetime(1999, 4, 2, 2, 4, 29, 999999)),
+    }
 
 
 def test_filter(patient_database):
@@ -166,12 +183,12 @@ def test_filter(patient_database):
 
     assert p.patient_id == 32
 
-    assert len(p.events) == 2
+    assert len(p.events) == 3
 
     assert p.events[0].code == "Whatever"
     assert p.events[1].code == "Whatever2"
 
-    assert p.events[0].time == datetime.datetime(2012, 10, 2)
+    assert p.events[0].time == None
     assert p.events[1].time == datetime.datetime(2013, 10, 2)
 
     assert p.events[0].other == "need"

@@ -1,6 +1,7 @@
 #include "property_reader.hh"
 
 #define PY_SSIZE_T_CLEAN
+#define ZSTD_STATIC_LINKING_ONLY
 #include <Python.h>
 #include <datetime.h>
 #include <fcntl.h>
@@ -21,8 +22,6 @@
 #include "dtype.hh"
 #include "mmap_file.hh"
 #include "pyutils.hh"
-
-#define ZSTD_STATIC_LINKING_ONLY
 #include "streamvbyte.h"
 #include "zstd.h"
 
@@ -288,10 +287,25 @@ struct StringPropertyReader : PropertyReader {
 
 struct TimePropertyReader : PropertyReader {
     TimePropertyReader(const std::filesystem::path& property_path)
-        : data_file(property_path) {}
+        : zdict_file(property_path / "zdict"),
+          data_file(property_path / "data"),
+          context(ZSTD_createDCtx(), context_deleter) {
+        if (zdict_file.bytes().size() != 0) {
+            size_t ret = ZSTD_DCtx_loadDictionary_byReference(
+                context.get(), (void*)zdict_file.bytes().data(),
+                zdict_file.bytes().size());
+            if (ZSTD_isError(ret)) {
+                throw std::runtime_error("Unable to load dictionary");
+            }
+        }
+    }
 
+    MmapFile zdict_file;
     MmapFile data_file;
 
+    std::unique_ptr<ZSTD_DCtx, decltype(context_deleter)> context;
+
+    std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
     std::vector<PyObjectWrapper> get_property_data(int32_t patient_offset,
@@ -300,30 +314,49 @@ struct TimePropertyReader : PropertyReader {
         uint64_t num_bytes =
             data_file.data<uint64_t>()[patient_offset + 1] - offset;
 
-        int64_t* start_timestamp =
-            (int64_t*)(data_file.bytes().data() + offset);
-
         uint32_t* length_pointer =
-            (uint32_t*)(data_file.bytes().data() + offset + sizeof(int64_t));
+            (uint32_t*)(data_file.bytes().data() + offset);
+        uint32_t decompressed_size = *length_pointer;
+        if (decompressed.size() < (decompressed_size + STREAMVBYTE_PADDING)) {
+            decompressed.resize(2 * (decompressed_size + STREAMVBYTE_PADDING));
+        }
+
+        size_t ret = ZSTD_decompressDCtx(
+            context.get(), decompressed.data(), decompressed.size(),
+            data_file.bytes().data() + offset + sizeof(uint32_t),
+            num_bytes - sizeof(uint32_t));
+
+        if (ZSTD_isError(ret)) {
+            throw std::runtime_error("Unable to decompress");
+        }
+
+        if (ret != decompressed_size) {
+            throw std::runtime_error("Decompressed the wrong amount of data");
+        }
+
+        int64_t* start_timestamp = (int64_t*)(decompressed.data());
+
+        length_pointer = (uint32_t*)(decompressed.data() + sizeof(int64_t));
 
         size_t num_values = *length_pointer;
         if (values.size() < num_values) {
             values.resize(num_values * 2);
         }
 
-        size_t num_read = streamvbyte_decode_0124(
-            (const uint8_t*)data_file.bytes().data() + offset +
-                sizeof(uint32_t) + sizeof(int64_t),
-            values.data(), num_values);
+        size_t num_read =
+            streamvbyte_decode_0124((const uint8_t*)decompressed.data() +
+                                        sizeof(uint32_t) + sizeof(int64_t),
+                                    values.data(), num_values);
 
-        if (num_read + sizeof(uint32_t) + sizeof(int64_t) != num_bytes) {
+        if (num_read + sizeof(uint32_t) + sizeof(int64_t) !=
+            decompressed_size) {
             throw std::runtime_error("Decoded too much? " +
                                      std::to_string(num_read) + " " +
                                      std::to_string(num_bytes));
         }
 
         std::vector<PyObjectWrapper> result;
-        result.reserve(length);
+        result.resize(length);
 
         int64_t seconds_per_day = (int64_t)(24 * 60 * 60);
         int64_t microseconds_per_second = (int64_t)(1000 * 1000);
@@ -565,6 +598,67 @@ std::pair<const char*, const char*> get_pyarrow_arguments(DataType type) {
                              std::to_string(static_cast<uint64_t>(type)));
 }
 
+template <typename T>
+struct NullMapReaderImpl : NullMapReader {
+    NullMapReaderImpl(const std::filesystem::path& root_directory)
+        : zdict_file(root_directory / "meds_reader.null_map" / "zdict"),
+          data_file(root_directory / "meds_reader.null_map" / "data"),
+          context(ZSTD_createDCtx(), context_deleter) {
+        if (zdict_file.bytes().size() != 0) {
+            size_t ret = ZSTD_DCtx_loadDictionary_byReference(
+                context.get(), (void*)zdict_file.bytes().data(),
+                zdict_file.bytes().size());
+            if (ZSTD_isError(ret)) {
+                throw std::runtime_error("Unable to load dictionary");
+            }
+        }
+    }
+
+    MmapFile zdict_file;
+    MmapFile data_file;
+
+    std::unique_ptr<ZSTD_DCtx, decltype(context_deleter)> context;
+
+    std::vector<char> decompressed;
+
+    std::vector<uint64_t> get_null_map(int32_t patient_offset, int32_t length) {
+        uint64_t offset = data_file.data<uint64_t>()[patient_offset];
+        uint64_t num_bytes =
+            data_file.data<uint64_t>()[patient_offset + 1] - offset;
+
+        uint32_t* length_pointer =
+            (uint32_t*)(data_file.bytes().data() + offset);
+        uint32_t decompressed_size = *length_pointer;
+        if (decompressed.size() < decompressed_size) {
+            decompressed.resize(2 * decompressed_size);
+        }
+
+        size_t ret = ZSTD_decompressDCtx(
+            context.get(), decompressed.data(), decompressed.size(),
+            data_file.bytes().data() + offset + sizeof(uint32_t),
+            num_bytes - sizeof(uint32_t));
+
+        if (ZSTD_isError(ret)) {
+            throw std::runtime_error("Unable to decompress " +
+                                     std::string(ZSTD_getErrorName(ret)));
+        }
+
+        if (ret != decompressed_size) {
+            throw std::runtime_error("Decompressed the wrong amount of data");
+        }
+
+        std::vector<uint64_t> result(length);
+
+        const T* data = (const T*)decompressed.data();
+
+        for (int32_t i = 0; i < length; i++) {
+            result[i] = data[i];
+        }
+
+        return result;
+    }
+};
+
 }  // namespace
 
 std::unique_ptr<PropertyReader> create_property_reader(
@@ -629,6 +723,21 @@ std::unique_ptr<PropertyReader> create_property_reader(
     throw std::runtime_error(
         "Unsupported property " + property_name + " " +
         std::to_string(static_cast<uint64_t>(property_type)));
+}
+
+std::unique_ptr<NullMapReader> create_null_map_reader(
+    const std::filesystem::path& root_directory, int num_properties) {
+    if (num_properties > 64) {
+        throw std::runtime_error("Too many properties");
+    } else if (num_properties > 32) {
+        return std::make_unique<NullMapReaderImpl<uint64_t>>(root_directory);
+    } else if (num_properties > 16) {
+        return std::make_unique<NullMapReaderImpl<uint32_t>>(root_directory);
+    } else if (num_properties > 8) {
+        return std::make_unique<NullMapReaderImpl<uint16_t>>(root_directory);
+    } else {
+        return std::make_unique<NullMapReaderImpl<uint8_t>>(root_directory);
+    }
 }
 
 PyObjectWrapper create_pyarrow_dtype(PyObject* pyarrow, DataType type) {

@@ -36,6 +36,10 @@ for patient_id in database:
     print(patient.patient_id)
     for event in patient.events:
         print(event.time, event.code)
+
+        # We can also iterate through all properties in a generic manner
+        for property_name, property_value in event:
+            print(property_name, property_value)
 ```
 
 <!-- Start OnlyGithub -->

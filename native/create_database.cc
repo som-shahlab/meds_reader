@@ -1,5 +1,7 @@
 #include "create_database.hh"
 
+#define ZSTD_STATIC_LINKING_ONLY
+
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -27,9 +29,11 @@
 #include "arrow/record_batch.h"
 #include "arrow/table.h"
 #include "arrow/util/type_fwd.h"
+#include "binary_version.hh"
 #include "blockingconcurrentqueue.h"
 #include "dtype.hh"
 #include "lightweightsemaphore.h"
+#include "mmap_file.hh"
 #include "parquet/arrow/reader.h"
 #include "parquet/arrow/schema.h"
 #include "parquet/arrow/writer.h"
@@ -37,7 +41,6 @@
 #include "streamvbyte.h"
 #include "zdict.h"
 #include "zstd.h"
-#include "binary_version.hh"
 
 namespace {
 
@@ -220,16 +223,12 @@ get_properties(const parquet::arrow::SchemaManifest& manifest) {
     }
 
     auto helper = [&](parquet::arrow::SchemaField& field) {
-        if (field.is_leaf()) {
-            if (field.field->type()->id() != arrow::Type::NA) {
-                result[field.field->name()] =
-                    std::make_pair(field.field->type(), field.column_index);
-            }
-        } else {
-            for (const auto& child : field.children) {
-                to_process.emplace(std::move(child));
-            }
+        if (!field.is_leaf()) {
+            throw std::runtime_error(
+                "meds_reader only supports leaf properties");
         }
+        result[field.field->name()] =
+            std::make_pair(field.field->type(), field.column_index);
     };
 
     while (!to_process.empty()) {
@@ -275,7 +274,7 @@ bool are_maps_equivalent(
 
 typedef std::pair<std::filesystem::path, size_t> WorkEntry;
 
-std::pair<std::map<std::string, std::shared_ptr<arrow::DataType>>,
+std::pair<std::vector<std::pair<std::string, std::shared_ptr<arrow::DataType>>>,
           std::vector<WorkEntry>>
 read_files(std::filesystem::path root_directory, int num_threads) {
     std::map<std::string, std::shared_ptr<arrow::DataType>> properties;
@@ -321,7 +320,12 @@ read_files(std::filesystem::path root_directory, int num_threads) {
         work_entries.push_back(std::make_pair(dir_entry.path(), index));
     }
 
-    return {properties, work_entries};
+    properties.erase("patient_id");
+
+    std::vector<std::pair<std::string, std::shared_ptr<arrow::DataType>>>
+        properties_list(std::begin(properties), std::end(properties));
+
+    return {properties_list, work_entries};
 }
 
 std::set<std::string> known_properties = {"code", "numeric_value"};
@@ -441,7 +445,7 @@ void iterate_strings_helper(
     };
 
     auto add_value = [&](std::string_view value) {
-        if (!has_event || remaining_events == 0) {
+        if (!has_event || (remaining_events == 0)) {
             if (has_event) {
                 flush_patient();
             } else {
@@ -679,9 +683,11 @@ void string_reader_thread_helper(
     };
 
     auto add_value = [&](std::string_view item) {
-        if (!has_event || remaining_events == 0) {
+        if (!has_event || (remaining_events == 0)) {
             if (has_event) {
                 flush_patient();
+            } else {
+                has_event = true;
             }
 
             items.clear();
@@ -1160,6 +1166,7 @@ void process_string_property(
     std::ofstream data_file((string_path / "data"), std::ios_base::out |
                                                         std::ios_base::binary |
                                                         std::ios_base::trunc);
+    data_file.exceptions(std::ifstream::failbit | std::ifstream::badbit);
 
     for (const auto& entry : work_entries) {
         auto& item = all_lengths[entry.second];
@@ -1172,10 +1179,12 @@ void process_string_property(
         std::filesystem::path entry_path =
             string_path / (std::to_string(entry.second) + ".data");
 
-        std::ifstream entry_file(entry_path,
-                                 std::ios_base::in | std::ios_base::binary);
+        if (all_lengths[entry.second].second.size() > 0) {
+            std::ifstream entry_file(entry_path,
+                                     std::ios_base::in | std::ios_base::binary);
 
-        data_file << entry_file.rdbuf();
+            data_file << entry_file.rdbuf();
+        }
 
         std::filesystem::remove(entry_path);
     }
@@ -1257,7 +1266,7 @@ void iterate_primitive(std::filesystem::path filename,
     };
 
     auto add_value = [&](std::string_view value) {
-        if (!has_event || remaining_events == 0) {
+        if (!has_event || (remaining_events == 0)) {
             if (has_event) {
                 flush_patient();
             } else {
@@ -1357,6 +1366,7 @@ std::pair<size_t, std::vector<uint64_t>> write_primitive_files(
     std::ofstream output_file(target_filename, std::ios_base::out |
                                                    std::ios_base::binary |
                                                    std::ios_base::trunc);
+    output_file.exceptions(std::ifstream::failbit | std::ifstream::badbit);
 
     uint64_t num_bytes = 0;
 
@@ -1514,23 +1524,20 @@ void process_primitive_property(
         std::filesystem::path entry_path =
             string_path / (std::to_string(entry.second) + ".data");
 
-        std::ifstream entry_file(entry_path,
-                                 std::ios_base::in | std::ios_base::binary);
+        if (all_lengths[entry.second].second.size() > 0) {
+            std::ifstream entry_file(entry_path,
+                                     std::ios_base::in | std::ios_base::binary);
 
-        data_file << entry_file.rdbuf();
+            data_file << entry_file.rdbuf();
+        }
 
         std::filesystem::remove(entry_path);
     }
 }
 
-std::tuple<uint32_t, std::vector<int64_t>, std::vector<uint32_t>,
-           std::vector<uint64_t>>
-get_patient_ids(std::filesystem::path filename,
-                std::filesystem::path target_path) {
-    std::ofstream output_file(target_path, std::ios_base::out |
-                                               std::ios_base::binary |
-                                               std::ios_base::trunc);
-
+template <typename F>
+void iterate_time(std::filesystem::path filename, std::string property_name,
+                  const std::vector<uint32_t>& patient_lengths, F func) {
     arrow::MemoryPool* pool = arrow::default_memory_pool();
 
     // Configure general Parquet reader settings
@@ -1553,22 +1560,12 @@ get_patient_ids(std::filesystem::path filename,
 
     auto properties = get_properties(arrow_reader->manifest());
 
-    int64_t patient_id_column = properties.find("patient_id")->second.second;
-    int64_t time_column = properties.find("time")->second.second;
-    std::vector<int> columns = {(int)patient_id_column, (int)time_column};
+    int64_t column = properties.find(property_name)->second.second;
+    std::vector<int> columns = {(int)column};
 
-    std::vector<int64_t> patient_ids;
-
-    std::vector<int64_t> unique_patient_ids;
-    std::vector<uint32_t> lengths;
-    std::vector<uint64_t> offsets;
-
-    uint64_t num_bytes = 0;
-
-    bool has_value = false;
-    size_t time_index = 0;
-    int64_t current_patient_id = 0;
-    size_t current_patient_length = 0;
+    size_t next_patient_index = 0;
+    size_t remaining_events;
+    bool has_event = false;
 
     constexpr int64_t micros_per_second = ((int64_t)1000) * 1000;
     constexpr int64_t micros_per_day = micros_per_second * 24 * 60 * 60;
@@ -1637,26 +1634,18 @@ get_patient_ids(std::filesystem::path filename,
 
         helper.resize(sizeof(int64_t) + sizeof(uint32_t) + count);
 
-        unique_patient_ids.push_back(current_patient_id);
-        offsets.push_back(num_bytes);
-        lengths.push_back(current_patient_length);
-
-        num_bytes += helper.size();
-
-        output_file.write(helper.data(), helper.size());
+        func(std::move(helper));
     };
 
     auto add_time = [&](std::optional<int64_t> time) {
-        int64_t next_patient_id = patient_ids[time_index++];
-
-        if (!has_value || (next_patient_id != current_patient_id)) {
-            if (has_value) {
+        if (!has_event || (remaining_events == 0)) {
+            if (has_event) {
                 flush_patient();
             } else {
-                has_value = true;
+                has_event = true;
             }
-            current_patient_id = next_patient_id;
-            current_patient_length = 0;
+
+            remaining_events = patient_lengths[next_patient_index++];
 
             values.clear();
             values.push_back(0);
@@ -1685,6 +1674,303 @@ get_patient_ids(std::filesystem::path filename,
             }
         }
 
+        remaining_events--;
+    };
+
+    for (int64_t row_group = 0; row_group < arrow_reader->num_row_groups();
+         row_group++) {
+        std::shared_ptr<arrow::Table> table;
+        PARQUET_THROW_NOT_OK(
+            arrow_reader->ReadRowGroup(row_group, columns, &table));
+
+        auto chunked_values = table->GetColumnByName(property_name);
+
+        for (const auto& array : chunked_values->chunks()) {
+            auto time_array =
+                std::dynamic_pointer_cast<arrow::TimestampArray>(array);
+            if (time_array == nullptr) {
+                throw std::runtime_error("Could not find property");
+            }
+
+            auto time_type = std::dynamic_pointer_cast<arrow::TimestampType>(
+                time_array->type());
+
+            if (time_type->unit() != arrow::TimeUnit::MICRO) {
+                throw std::runtime_error("Wrong units for timestamp");
+            }
+
+            if (!time_type->timezone().empty()) {
+                throw std::runtime_error("Need an empty timezone");
+            }
+            for (int64_t i = 0; i < time_array->length(); i++) {
+                if (time_array->IsNull(i)) {
+                    add_time(std::nullopt);
+                } else {
+                    add_time(time_array->Value(i));
+                }
+            }
+        }
+    }
+
+    if (has_event) {
+        flush_patient();
+    }
+}
+
+std::vector<std::vector<char>> get_time_samples(
+    std::filesystem::path filename, std::string property_name,
+    const std::vector<uint32_t>& patient_lengths, size_t num_samples) {
+    std::vector<std::vector<char>> samples;
+    size_t sample_count = 0;
+
+    iterate_time(filename, property_name, patient_lengths,
+                 [&](std::vector<char> bytes) {
+                     sample_count++;
+
+                     if (samples.size() < num_samples) {
+                         samples.emplace_back(std::move(bytes));
+                     } else {
+                         size_t j = (size_t)(rand() % sample_count);
+                         if (j < num_samples) {
+                             samples[j] = std::move(bytes);
+                         }
+                     }
+                 });
+
+    return samples;
+}
+
+std::pair<size_t, std::vector<uint64_t>> write_time_files(
+    std::filesystem::path filename, std::string property_name,
+    const std::vector<uint32_t>& patient_lengths,
+    const std::vector<char>& dictionary,
+    std::filesystem::path target_filename) {
+    std::vector<uint64_t> offsets;
+
+    std::ofstream output_file(target_filename, std::ios_base::out |
+                                                   std::ios_base::binary |
+                                                   std::ios_base::trunc);
+    output_file.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+
+    uint64_t num_bytes = 0;
+
+    auto context_deleter = [](ZSTD_CCtx* context) { ZSTD_freeCCtx(context); };
+
+    std::unique_ptr<ZSTD_CCtx, decltype(context_deleter)> context2{
+        ZSTD_createCCtx(), context_deleter};
+
+    size_t res =
+        ZSTD_CCtx_setParameter(context2.get(), ZSTD_c_compressionLevel, 22);
+
+    if (ZSTD_isError(res)) {
+        throw std::runtime_error("Could not set the compression level");
+    }
+
+    res = ZSTD_CCtx_loadDictionary(context2.get(), dictionary.data(),
+                                   dictionary.size());
+    if (ZSTD_isError(res)) {
+        throw std::runtime_error("Could not load the dictionary");
+    }
+
+    iterate_time(
+        filename, property_name, patient_lengths, [&](std::vector<char> bytes) {
+            std::vector<char> final_bytes(sizeof(uint32_t) +
+                                          ZSTD_compressBound(bytes.size()));
+            res = ZSTD_compress2(
+                context2.get(), final_bytes.data() + sizeof(uint32_t),
+                final_bytes.size(), bytes.data(), bytes.size());
+
+            if (ZSTD_isError(res)) {
+                throw std::runtime_error("Unable to compress");
+            }
+
+            final_bytes.resize(res + sizeof(uint32_t));
+
+            uint32_t* length_pointer = (uint32_t*)final_bytes.data();
+            *length_pointer = bytes.size();
+
+            offsets.push_back(num_bytes);
+
+            output_file.write(final_bytes.data(), final_bytes.size());
+
+            num_bytes += final_bytes.size();
+        });
+
+    return std::make_pair(num_bytes, std::move(offsets));
+}
+
+void process_time_property(
+    const std::string& property_name,
+    const std::vector<std::vector<uint32_t>>& patient_lengths,
+    std::filesystem::path temp_path, const std::vector<WorkEntry>& work_entries,
+    int num_threads) {
+    std::filesystem::path string_path = temp_path / property_name;
+    std::filesystem::create_directories(string_path);
+
+    // We have to start by reading everything in
+
+    std::vector<std::vector<std::vector<char>>> all_samples(
+        work_entries.size());
+
+    size_t num_samples_per_entry =
+        (10 * 1000 + work_entries.size() - 1) / work_entries.size();
+
+    run_all(work_entries, num_threads,
+            [&all_samples, &property_name, &patient_lengths,
+             num_samples_per_entry](std::filesystem::path path, size_t index) {
+                all_samples[index] = get_time_samples(path, property_name,
+                                                      patient_lengths[index],
+                                                      num_samples_per_entry);
+            });
+
+    std::vector<size_t> sample_sizes;
+    std::vector<char> sample_buffer;
+
+    for (const auto& samples : all_samples) {
+        for (const auto& sample : samples) {
+            sample_sizes.push_back(sample.size());
+            sample_buffer.insert(std::end(sample_buffer), std::begin(sample),
+                                 std::end(sample));
+        }
+    }
+
+    size_t dictionary_size = 100 * 1000;  // 100 kilobytes
+    std::vector<char> dictionary(dictionary_size);
+
+    size_t dict_size = ZDICT_trainFromBuffer(
+        dictionary.data(), dictionary.size(), sample_buffer.data(),
+        sample_sizes.data(), sample_sizes.size());
+
+    if (ZDICT_isError(dict_size)) {
+        dict_size = 0;
+    }
+
+    dictionary.resize(dict_size);
+
+    {
+        std::ofstream zdict(
+            string_path / std::string("zdict"),
+            std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+        zdict.write(dictionary.data(), dictionary.size());
+    }
+
+    std::vector<std::pair<size_t, std::vector<uint64_t>>> all_lengths(
+        work_entries.size());
+
+    run_all(work_entries, num_threads,
+            [&all_lengths, &string_path, &property_name, &patient_lengths,
+             &dictionary](std::filesystem::path path, size_t index) {
+                std::filesystem::path target_path =
+                    string_path / (std::to_string(index) + ".data");
+                all_lengths[index] = write_time_files(path, property_name,
+                                                      patient_lengths[index],
+                                                      dictionary, target_path);
+            });
+
+    uint64_t num_patients = 0;
+
+    for (const auto& length : all_lengths) {
+        num_patients += length.second.size();
+    }
+
+    uint64_t current_offset = (num_patients + 1) * sizeof(uint64_t);
+
+    for (auto& length : all_lengths) {
+        size_t temp = length.first;
+
+        length.first = current_offset;
+
+        current_offset += temp;
+    }
+
+    run_all(work_entries, num_threads,
+            [&all_lengths](std::filesystem::path path, size_t index) {
+                auto& item = all_lengths[index];
+                for (auto& val : item.second) {
+                    val += item.first;
+                }
+            });
+
+    all_lengths.back().second.push_back(current_offset);
+
+    std::ofstream data_file((string_path / "data"), std::ios_base::out |
+                                                        std::ios_base::binary |
+                                                        std::ios_base::trunc);
+
+    for (const auto& entry : work_entries) {
+        auto& item = all_lengths[entry.second];
+        ssize_t num_to_write = item.second.size() * sizeof(uint64_t);
+        const char* buffer = (const char*)item.second.data();
+        data_file.write(buffer, num_to_write);
+    }
+
+    for (const auto& entry : work_entries) {
+        std::filesystem::path entry_path =
+            string_path / (std::to_string(entry.second) + ".data");
+
+        if (all_lengths[entry.second].second.size() > 0) {
+            std::ifstream entry_file(entry_path,
+                                     std::ios_base::in | std::ios_base::binary);
+
+            data_file << entry_file.rdbuf();
+        }
+
+        std::filesystem::remove(entry_path);
+    }
+}
+
+std::pair<std::vector<int64_t>, std::vector<uint32_t>> get_patient_ids(
+    std::filesystem::path filename) {
+    arrow::MemoryPool* pool = arrow::default_memory_pool();
+
+    // Configure general Parquet reader settings
+    auto reader_properties = parquet::ReaderProperties(pool);
+    reader_properties.set_buffer_size(1024 * 1024);
+    reader_properties.enable_buffered_stream();
+
+    // Configure Arrow-specific Parquet reader settings
+    auto arrow_reader_props = parquet::ArrowReaderProperties();
+    arrow_reader_props.set_batch_size(128 * 1024);  // default 64 * 1024
+
+    parquet::arrow::FileReaderBuilder reader_builder;
+    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename, /*memory_map=*/false,
+                                                 reader_properties));
+    reader_builder.memory_pool(pool);
+    reader_builder.properties(arrow_reader_props);
+
+    std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
+    PARQUET_ASSIGN_OR_THROW(arrow_reader, reader_builder.Build());
+
+    auto properties = get_properties(arrow_reader->manifest());
+
+    int64_t patient_id_column = properties.find("patient_id")->second.second;
+    std::vector<int> columns = {(int)patient_id_column};
+
+    std::vector<int64_t> patient_ids;
+
+    std::vector<int64_t> unique_patient_ids;
+    std::vector<uint32_t> lengths;
+
+    bool has_event = false;
+    int64_t current_patient_id = 0;
+    size_t current_patient_length = 0;
+
+    auto flush_patient = [&]() {
+        unique_patient_ids.push_back(current_patient_id);
+        lengths.push_back(current_patient_length);
+    };
+
+    auto add_patient_id = [&](int64_t patient_id) {
+        if (!has_event || (patient_id != current_patient_id)) {
+            if (has_event) {
+                flush_patient();
+            } else {
+                has_event = true;
+            }
+            current_patient_id = patient_id;
+            current_patient_length = 0;
+        }
+
         current_patient_length++;
     };
 
@@ -1711,57 +1997,22 @@ get_patient_ids(std::filesystem::path filename,
                 if (!patient_id->IsValid(i)) {
                     throw std::runtime_error("Invalid timestamp");
                 }
-                patient_ids.push_back(patient_id->Value(i));
-            }
-        }
-
-        auto chunked_time = table->GetColumnByName("time");
-
-        if (chunked_time == nullptr) {
-            throw std::runtime_error("Could not get column");
-        }
-
-        for (const auto& array : chunked_time->chunks()) {
-            auto time_array =
-                std::dynamic_pointer_cast<arrow::TimestampArray>(array);
-            if (time_array == nullptr) {
-                throw std::runtime_error("Could not find property");
-            }
-
-            auto time_type = std::dynamic_pointer_cast<arrow::TimestampType>(
-                time_array->type());
-
-            if (time_type->unit() != arrow::TimeUnit::MICRO) {
-                throw std::runtime_error("Wrong units for timestamp");
-            }
-
-            if (!time_type->timezone().empty()) {
-                throw std::runtime_error("Need an empty timezone");
-            }
-
-            for (int64_t i = 0; i < time_array->length(); i++) {
-                if (time_array->IsNull(i)) {
-                    add_time(std::nullopt);
-                } else {
-                    add_time(time_array->Value(i));
-                }
+                add_patient_id(patient_id->Value(i));
             }
         }
     }
 
-    if (has_value) {
+    if (has_event) {
         flush_patient();
     }
 
-    return {num_bytes, std::move(unique_patient_ids), std::move(lengths),
-            std::move(offsets)};
+    return {std::move(unique_patient_ids), std::move(lengths)};
 }
 
-std::pair<std::vector<std::vector<uint32_t>>, uint32_t> process_patient_id_and_time(
+std::pair<std::vector<std::vector<uint32_t>>, uint32_t> process_patient_id(
     std::filesystem::path temp_path, const std::vector<WorkEntry>& work_entries,
     int num_threads) {
-    std::vector<std::tuple<uint32_t, std::vector<int64_t>,
-                           std::vector<uint32_t>, std::vector<uint64_t>>>
+    std::vector<std::pair<std::vector<int64_t>, std::vector<uint32_t>>>
         all_lengths(work_entries.size());
 
     std::vector<std::vector<uint32_t>> result_lengths(work_entries.size());
@@ -1769,36 +2020,14 @@ std::pair<std::vector<std::vector<uint32_t>>, uint32_t> process_patient_id_and_t
     run_all(
         work_entries, num_threads,
         [&temp_path, &all_lengths](std::filesystem::path path, size_t index) {
-            std::filesystem::path target_path =
-                temp_path / (std::to_string(index) + ".data");
-            all_lengths[index] = get_patient_ids(path, target_path);
+            all_lengths[index] = get_patient_ids(path);
         });
 
     size_t num_patients = 0;
 
     for (const auto& length : all_lengths) {
-        num_patients += std::get<1>(length).size();
+        num_patients += length.first.size();
     }
-
-    uint64_t current_offset = (num_patients + 1) * sizeof(uint64_t);
-
-    for (auto& length : all_lengths) {
-        size_t temp = std::get<0>(length);
-
-        std::get<0>(length) = current_offset;
-
-        current_offset += temp;
-    }
-
-    run_all(work_entries, num_threads,
-            [&all_lengths](std::filesystem::path path, size_t index) {
-                auto& item = all_lengths[index];
-                for (auto& val : std::get<3>(item)) {
-                    val += std::get<0>(item);
-                }
-            });
-
-    std::get<3>(all_lengths.back()).push_back(current_offset);
 
     {
         std::ofstream pids_file(
@@ -1808,50 +2037,24 @@ std::pair<std::vector<std::vector<uint32_t>>, uint32_t> process_patient_id_and_t
             temp_path / "meds_reader.length",
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 
-        std::ofstream data_file(
-            (temp_path / "time"),
-            std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
-
         absl::flat_hash_set<int64_t> seen_patient_ids;
 
         for (const auto& entry : work_entries) {
             auto& item = all_lengths[entry.second];
-            pids_file.write((const char*)std::get<1>(item).data(),
-                            sizeof(int64_t) * std::get<1>(item).size());
-            for (int64_t pid : std::get<1>(item)) {
+            pids_file.write((const char*)item.first.data(),
+                            sizeof(int64_t) * item.first.size());
+            for (int64_t pid : item.first) {
                 if (seen_patient_ids.count(pid) != 0) {
                     throw std::runtime_error("Had duplicate patient ids " +
                                              std::to_string(pid));
                 }
                 seen_patient_ids.insert(pid);
             }
-            lengths_file.write((const char*)std::get<2>(item).data(),
-                               sizeof(uint32_t) * std::get<2>(item).size());
+            lengths_file.write((const char*)item.second.data(),
+                               sizeof(uint32_t) * item.second.size());
 
-            ssize_t num_to_write = std::get<3>(item).size() * sizeof(uint64_t);
-            const char* buffer = (const char*)std::get<3>(item).data();
-
-            data_file.write(buffer, num_to_write);
-
-            result_lengths[entry.second] = std::move(std::get<2>(item));
+            result_lengths[entry.second] = std::move(item.second);
         }
-
-        for (const auto& entry : work_entries) {
-            size_t index = entry.second;
-
-            std::filesystem::path entry_path =
-                temp_path / (std::to_string(index) + ".data");
-
-            std::ifstream entry_file(entry_path,
-                                     std::ios_base::in | std::ios_base::binary);
-
-            data_file << entry_file.rdbuf();
-
-            std::filesystem::remove(entry_path);
-        }
-
-        char nonsense_buffer[STREAMVBYTE_PADDING] = "PADDING";
-        data_file.write(nonsense_buffer, STREAMVBYTE_PADDING);
     }
 
     return {result_lengths, num_patients};
@@ -1906,6 +2109,12 @@ void process_property(const std::string& property_name,
                       const std::filesystem::path& temp_path,
                       const std::vector<WorkEntry>& work_entries,
                       int num_threads) {
+    if (property_name == "time") {
+        process_time_property(property_name, patient_lengths, temp_path,
+                              work_entries, num_threads);
+        return;
+    }
+
     switch (type->id()) {
         case arrow::Type::STRING:
         case arrow::Type::LARGE_STRING:
@@ -1936,13 +2145,389 @@ void process_property(const std::string& property_name,
     abort();
 }
 
+template <typename F>
+void run_all_simple(int num_patients, int num_threads, F func) {
+    std::vector<std::thread> threads;
+
+    int patients_per_thread = (num_patients + num_threads - 1) / num_threads;
+
+    for (int i = 0; i < num_threads; i++) {
+        threads.emplace_back([&func, i, num_patients, patients_per_thread]() {
+            int start = std::min(num_patients, patients_per_thread * i);
+            int end = std::min(num_patients, patients_per_thread * (i + 1));
+            func(i, start, end);
+        });
+    }
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+}
+
+auto context_deleter = [](ZSTD_DCtx* context) { ZSTD_freeDCtx(context); };
+
+struct PropertyNullReader {
+    PropertyNullReader(const std::filesystem::path& property_path,
+                       std::string property_name)
+        : zdict_file(property_path / "zdict"),
+          data_file(property_path / "data"),
+          context(ZSTD_createDCtx(), context_deleter),
+          is_time(property_name == "time") {
+        if (zdict_file.bytes().size() != 0) {
+            size_t ret = ZSTD_DCtx_loadDictionary_byReference(
+                context.get(), (void*)zdict_file.bytes().data(),
+                zdict_file.bytes().size());
+            if (ZSTD_isError(ret)) {
+                throw std::runtime_error("Unable to load dictionary");
+            }
+        }
+    }
+
+    std::vector<char> decompressed;
+    std::vector<uint32_t> values;
+
+    std::vector<uint64_t> get_null_bytes(int32_t patient_offset,
+                                         int32_t length) {
+        uint64_t offset = data_file.data<uint64_t>()[patient_offset];
+        uint64_t num_bytes =
+            data_file.data<uint64_t>()[patient_offset + 1] - offset;
+
+        uint32_t* length_pointer =
+            (uint32_t*)(data_file.bytes().data() + offset);
+        uint32_t decompressed_size = *length_pointer;
+        if (decompressed.size() < decompressed_size) {
+            decompressed.resize(2 * decompressed_size);
+        }
+
+        size_t ret = ZSTD_decompressDCtx(
+            context.get(), decompressed.data(), decompressed.size(),
+            data_file.bytes().data() + offset + sizeof(uint32_t),
+            num_bytes - sizeof(uint32_t));
+
+        if (ZSTD_isError(ret)) {
+            throw std::runtime_error("Unable to decompress " +
+                                     std::string(ZSTD_getErrorName(ret)));
+        }
+
+        if (ret != decompressed_size) {
+            throw std::runtime_error("Decompressed the wrong amount of data " +
+                                     std::to_string(ret) + " " +
+                                     std::to_string(decompressed_size));
+        }
+
+        auto num_null_bytes =
+            (length + sizeof(uint64_t) * 8 - 1) / (sizeof(uint64_t) * 8);
+        if (is_time) {
+            std::vector<uint64_t> result(num_null_bytes,
+                                         std::numeric_limits<uint64_t>::max());
+
+            length_pointer = (uint32_t*)(decompressed.data() + sizeof(int64_t));
+
+            size_t num_values = *length_pointer;
+            if (values.size() < num_values) {
+                values.resize(num_values * 2);
+            }
+
+            size_t num_read =
+                streamvbyte_decode_0124((const uint8_t*)decompressed.data() +
+                                            sizeof(uint32_t) + sizeof(int64_t),
+                                        values.data(), num_values);
+
+            if (num_read + sizeof(uint32_t) + sizeof(int64_t) !=
+                decompressed_size) {
+                throw std::runtime_error("Decoded too much? " +
+                                         std::to_string(num_read) + " " +
+                                         std::to_string(num_bytes));
+            }
+
+            uint32_t num_null = values[0];
+
+            for (uint32_t i = 0; i < num_null; i++) {
+                uint64_t offset = i % 64;
+                uint64_t mask = 1;
+                mask <<= offset;
+
+                result[i / 64] &= ~mask;
+            }
+
+            return result;
+
+        } else {
+            absl::Span<const uint64_t> null_bytes{
+                (const uint64_t*)decompressed.data(), num_null_bytes};
+
+            return std::vector<uint64_t>(std::begin(null_bytes),
+                                         std::end(null_bytes));
+        }
+    }
+
+    MmapFile zdict_file;
+    MmapFile data_file;
+
+    std::unique_ptr<ZSTD_DCtx, decltype(context_deleter)> context;
+    bool is_time;
+};
+
+template <typename T, typename F>
+void iterate_null_map(std::vector<PropertyNullReader>& readers,
+                      absl::Span<const int32_t> length_map, int32_t start,
+                      int32_t end, F func) {
+    std::vector<std::vector<uint64_t>> null_maps(readers.size());
+
+    for (int32_t patient_id = start; patient_id < end; patient_id++) {
+        int32_t length = length_map[patient_id];
+
+        for (size_t i = 0; i < readers.size(); i++) {
+            null_maps[i] = readers[i].get_null_bytes(patient_id, length);
+        }
+
+        std::vector<char> bytes(sizeof(T) * length);
+        T* null_bytes = (T*)bytes.data();
+
+        std::bitset<sizeof(T) * 8> next_null_byte;
+
+        for (int32_t i = 0; i < length; i++) {
+            next_null_byte.reset();
+
+            for (size_t property_index = 0; property_index < readers.size();
+                 property_index++) {
+                uint64_t offset = i % 64;
+                uint64_t mask = 1;
+                mask <<= offset;
+
+                bool is_present =
+                    (null_maps[property_index][i / 64] & mask) != 0;
+                next_null_byte.set(property_index, is_present);
+            }
+
+            *null_bytes++ = next_null_byte.to_ullong();
+        }
+
+        func(bytes);
+    }
+}
+
 template <typename T>
-void process_null_maps(const std::map<std::string, std::shared_ptr<arrow::DataType>>& properties, 
-    const std::filesystem::path& destination_path, int num_threads, int num_patients) {
+std::vector<std::vector<char>> get_null_map_samples(
+    std::vector<PropertyNullReader>& readers,
+    absl::Span<const int32_t> length_map, int32_t start, int32_t end,
+    size_t num_samples) {
+    std::vector<std::vector<char>> samples;
+    size_t sample_count = 0;
 
-    
+    iterate_null_map<T>(readers, length_map, start, end,
+                        [&](std::vector<char> bytes) {
+                            sample_count++;
 
+                            if (samples.size() < num_samples) {
+                                samples.emplace_back(std::move(bytes));
+                            } else {
+                                size_t j = (size_t)(rand() % sample_count);
+                                if (j < num_samples) {
+                                    samples[j] = std::move(bytes);
+                                }
+                            }
+                        });
 
+    return samples;
+}
+
+template <typename T>
+std::pair<size_t, std::vector<uint64_t>> write_null_map(
+    std::vector<PropertyNullReader>& readers,
+    absl::Span<const int32_t> length_map, int32_t start, int32_t end,
+    const std::vector<char>& dictionary,
+    std::filesystem::path target_filename) {
+    std::vector<uint64_t> offsets;
+
+    std::ofstream output_file(target_filename, std::ios_base::out |
+                                                   std::ios_base::binary |
+                                                   std::ios_base::trunc);
+    output_file.exceptions(std::ofstream::failbit | std::ofstream::badbit |
+                           std::ofstream::eofbit);
+
+    uint64_t num_bytes = 0;
+
+    auto context_deleter = [](ZSTD_CCtx* context) { ZSTD_freeCCtx(context); };
+
+    std::unique_ptr<ZSTD_CCtx, decltype(context_deleter)> context2{
+        ZSTD_createCCtx(), context_deleter};
+
+    size_t res =
+        ZSTD_CCtx_setParameter(context2.get(), ZSTD_c_compressionLevel, 22);
+
+    if (ZSTD_isError(res)) {
+        throw std::runtime_error("Could not set the compression level");
+    }
+
+    res = ZSTD_CCtx_loadDictionary(context2.get(), dictionary.data(),
+                                   dictionary.size());
+    if (ZSTD_isError(res)) {
+        throw std::runtime_error("Could not load the dictionary");
+    }
+
+    iterate_null_map<T>(
+        readers, length_map, start, end, [&](std::vector<char> bytes) {
+            std::vector<char> final_bytes(sizeof(uint32_t) +
+                                          ZSTD_compressBound(bytes.size()));
+            res = ZSTD_compress2(
+                context2.get(), final_bytes.data() + sizeof(uint32_t),
+                final_bytes.size(), bytes.data(), bytes.size());
+
+            if (ZSTD_isError(res)) {
+                throw std::runtime_error("Unable to compress");
+            }
+
+            final_bytes.resize(res + sizeof(uint32_t));
+
+            uint32_t* length_pointer = (uint32_t*)final_bytes.data();
+            *length_pointer = bytes.size();
+
+            offsets.push_back(num_bytes);
+
+            output_file.write(final_bytes.data(), final_bytes.size());
+
+            num_bytes += final_bytes.size();
+        });
+
+    return std::make_pair(num_bytes, std::move(offsets));
+}
+
+template <typename T>
+void process_null_map(
+    const std::vector<std::pair<std::string, std::shared_ptr<arrow::DataType>>>&
+        properties,
+    const std::filesystem::path& destination_path, int num_threads,
+    int num_patients) {
+    MmapFile length_file(destination_path / "meds_reader.length");
+    absl::Span<const int32_t> patient_lengths = length_file.data<int32_t>();
+
+    std::vector<std::vector<PropertyNullReader>> property_readers(num_threads);
+    for (int i = 0; i < num_threads; i++) {
+        for (const auto& entry : properties) {
+            property_readers[i].emplace_back(destination_path / entry.first,
+                                             entry.first);
+        }
+    }
+
+    std::filesystem::path string_path =
+        destination_path / "meds_reader.null_map";
+    std::filesystem::create_directories(string_path);
+
+    // We have to start by reading everything in
+
+    std::vector<std::vector<std::vector<char>>> all_samples(num_threads);
+
+    size_t num_samples_per_entry = (10 * 1000 + num_threads - 1) / num_threads;
+
+    run_all_simple(num_patients, num_threads,
+                   [&all_samples, &property_readers, &patient_lengths,
+                    num_samples_per_entry](size_t index, int start, int end) {
+                       all_samples[index] = get_null_map_samples<T>(
+                           property_readers[index], patient_lengths, start, end,
+                           num_samples_per_entry);
+                   });
+
+    std::vector<size_t> sample_sizes;
+    std::vector<char> sample_buffer;
+
+    for (const auto& samples : all_samples) {
+        for (const auto& sample : samples) {
+            sample_sizes.push_back(sample.size());
+            sample_buffer.insert(std::end(sample_buffer), std::begin(sample),
+                                 std::end(sample));
+        }
+    }
+
+    size_t dictionary_size = 100 * 1000;  // 100 kilobytes
+    std::vector<char> dictionary(dictionary_size);
+
+    size_t dict_size = ZDICT_trainFromBuffer(
+        dictionary.data(), dictionary.size(), sample_buffer.data(),
+        sample_sizes.data(), sample_sizes.size());
+
+    if (ZDICT_isError(dict_size)) {
+        dict_size = 0;
+    }
+
+    dictionary.resize(dict_size);
+
+    {
+        std::ofstream zdict(
+            string_path / std::string("zdict"),
+            std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+        zdict.write(dictionary.data(), dictionary.size());
+    }
+
+    std::vector<std::pair<size_t, std::vector<uint64_t>>> all_lengths(
+        num_threads);
+
+    run_all_simple(
+        num_patients, num_threads,
+        [&all_lengths, &property_readers, &string_path, &patient_lengths,
+         &dictionary](size_t index, int start, int end) {
+            std::filesystem::path target_path =
+                string_path / (std::to_string(index) + ".data");
+            all_lengths[index] =
+                write_null_map<T>(property_readers[index], patient_lengths,
+                                  start, end, dictionary, target_path);
+        });
+
+    uint64_t current_offset = (num_patients + 1) * sizeof(uint64_t);
+
+    for (auto& length : all_lengths) {
+        size_t temp = length.first;
+
+        length.first = current_offset;
+
+        current_offset += temp;
+    }
+
+    run_all_simple(num_patients, num_threads,
+                   [&all_lengths](size_t index, int start, int end) {
+                       auto& item = all_lengths[index];
+                       for (auto& val : item.second) {
+                           val += item.first;
+                       }
+                   });
+
+    for (size_t i = all_lengths.size() - 1; i >= 0; i--) {
+        auto& val = all_lengths[i];
+        if (val.second.size() != 0) {
+            val.second.push_back(current_offset);
+            break;
+        }
+    }
+
+    std::ofstream data_file((string_path / "data"), std::ios_base::out |
+                                                        std::ios_base::binary |
+                                                        std::ios_base::trunc);
+
+    data_file.exceptions(std::ofstream::failbit | std::ofstream::badbit |
+                         std::ofstream::eofbit);
+
+    for (int i = 0; i < num_threads; i++) {
+        auto& item = all_lengths[i];
+        ssize_t num_to_write = item.second.size() * sizeof(uint64_t);
+        const char* buffer = (const char*)item.second.data();
+        data_file.write(buffer, num_to_write);
+    }
+
+    for (int i = 0; i < num_threads; i++) {
+        std::filesystem::path entry_path =
+            string_path / (std::to_string(i) + ".data");
+
+        if (all_lengths[i].second.size() > 0) {
+            std::ifstream entry_file(entry_path,
+                                     std::ios_base::in | std::ios_base::binary);
+            entry_file.exceptions(std::ofstream::failbit |
+                                  std::ofstream::badbit);
+
+            data_file << entry_file.rdbuf();
+        }
+
+        std::filesystem::remove(entry_path);
+    }
 }
 
 }  // namespace
@@ -1954,11 +2539,11 @@ void create_database(const char* source, const char* destination,
 
     std::filesystem::create_directory(destination_path);
 
-    {  
+    {
         std::ofstream version_file(destination_path / "meds_reader.version");
         version_file << CURRENT_BINARY_VERSION << std::endl;
     }
-    
+
     std::filesystem::copy(source_path / "metadata",
                           destination_path / "metadata");
 
@@ -1974,10 +2559,6 @@ void create_database(const char* source, const char* destination,
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 
         for (const auto& property : properties) {
-            if (property.first == "patient_id") {
-                continue;
-            }
-
             size_t name_length = property.first.size();
             property_file.write((const char*)&name_length, sizeof(name_length));
             property_file.write(property.first.data(), property.first.size());
@@ -1989,19 +2570,13 @@ void create_database(const char* source, const char* destination,
         }
     }
 
-    auto patient_lengths_and_num_patients = process_patient_id_and_time(
-        destination_path, work_entries, num_threads);
+    auto patient_lengths_and_num_patients =
+        process_patient_id(destination_path, work_entries, num_threads);
 
     const auto& patient_lengths = patient_lengths_and_num_patients.first;
     const auto& num_patients = patient_lengths_and_num_patients.second;
 
     for (const auto& property : properties) {
-        if (property.first == "patient_id" || property.first == "time") {
-            continue;
-        }
-
-        std::cout << "Processing " << property.first << std::endl;
-
         process_property(property.first, property.second, patient_lengths,
                          destination_path, work_entries, num_threads);
     }
@@ -2009,12 +2584,16 @@ void create_database(const char* source, const char* destination,
     if (properties.size() > 64) {
         throw std::runtime_error("Too many properties");
     } else if (properties.size() > 32) {
-        process_null_maps<uint64_t>(properties, destination_path, num_threads, num_patients);
+        process_null_map<uint64_t>(properties, destination_path, num_threads,
+                                   num_patients);
     } else if (properties.size() > 16) {
-        process_null_maps<uint32_t>(properties, destination_path, num_threads, num_patients);
+        process_null_map<uint32_t>(properties, destination_path, num_threads,
+                                   num_patients);
     } else if (properties.size() > 8) {
-        process_null_maps<uint16_t>(properties, destination_path, num_threads, num_patients);
+        process_null_map<uint16_t>(properties, destination_path, num_threads,
+                                   num_patients);
     } else {
-        process_null_maps<uint8_t>(properties, destination_path, num_threads, num_patients);
+        process_null_map<uint8_t>(properties, destination_path, num_threads,
+                                  num_patients);
     }
 }

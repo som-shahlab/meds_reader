@@ -4,18 +4,19 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <datetime.h>
+
 #include <fstream>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
+#include "binary_version.hh"
 #include "dtype.hh"
 #include "fast_shared_ptr.hh"
 #include "mmap_file.hh"
 #include "perfect_hash.hh"
 #include "property_reader.hh"
 #include "pyutils.hh"
-#include "binary_version.hh"
 
 namespace {
 
@@ -26,10 +27,12 @@ struct PatientDatabase : public PyObject,
     PatientDatabase(std::string_view dir);
 
     size_t get_num_properties();
+    PyObject* get_property_name(size_t property_index);
     ssize_t get_property_index(PyObject* property_name);
     std::vector<PyObjectWrapper> get_property_data(size_t index,
                                                    int32_t patient_offset,
                                                    int32_t length);
+    std::vector<uint64_t> get_null_map(int32_t patient_offset, int32_t length);
     int64_t get_patient_id(int32_t patient_offset) const;
     uint32_t get_patient_length(int32_t patient_offset) const;
     std::optional<int32_t> get_patient_offset(int64_t patient_id);
@@ -54,7 +57,9 @@ struct PatientDatabase : public PyObject,
 
     std::vector<std::pair<std::string, DataType>> properties;
     std::vector<std::unique_ptr<PropertyReader>> property_accessors;
+    std::unique_ptr<NullMapReader> null_map_reader;
 
+    std::vector<PyObjectWrapper> property_names;
     std::optional<PerfectHashMap<PyObject>> property_map;
 
     MmapFile patient_id_file;
@@ -95,6 +100,7 @@ PyTypeObject PatientDatabase::Type = {
 };
 
 struct Event;
+struct EventPropertyIterator;
 
 struct Patient : public PyObject, fast_shared_ptr_object<Patient> {
     static PyTypeObject Type;
@@ -109,6 +115,7 @@ struct Patient : public PyObject, fast_shared_ptr_object<Patient> {
     void* allocation;
     std::vector<PyObjectWrapper>* saved_properties;
     Event* events;
+    std::vector<uint64_t> null_map;
 
     PyObjectWrapper patient_id;
     PyObjectWrapper events_obj;
@@ -126,11 +133,14 @@ struct Patient : public PyObject, fast_shared_ptr_object<Patient> {
 
    private:
     friend Event;
+    friend EventPropertyIterator;
 
     Patient(const fast_shared_ptr<PatientDatabase>& pd, int32_t po,
             PyObject* patient_id);
 
     PyObject* get_property(PyObject* property_name, Event* event_ptr);
+    PyObject* get_property(size_t property_index, Event* event_ptr);
+    uint64_t get_null_map(Event* event_ptr);
 };
 
 PyGetSetDef PatientGetSet[] = {
@@ -166,6 +176,7 @@ struct Event : public PyObject {
     void dealloc();
     PyObject* str();
     __attribute__((always_inline)) PyObject* getattro(PyObject* key);
+    PyObject* iter();
     //-----------------------------------------
 };
 
@@ -178,6 +189,40 @@ PyTypeObject Event::Type = {
     .tp_getattro = convert_to_cfunc<&Event::getattro>(),
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_doc = PyDoc_STR("Event"),
+    .tp_iter = convert_to_cfunc<&Event::iter>(),
+    .tp_init = nullptr,
+    .tp_alloc = nullptr,
+    .tp_new = nullptr,
+    .tp_free = nullptr,
+};
+
+struct EventPropertyIterator : public PyObject {
+    static PyTypeObject Type;
+
+    fast_shared_ptr<Patient> patient;
+    Event* event;
+    uint64_t current_index;
+
+    EventPropertyIterator(const fast_shared_ptr<Patient>& pd, Event* e);
+
+    // Python methods
+    //-----------------------------------------
+    void dealloc();
+    __attribute__((always_inline)) PyObject* next();
+    PyObject* iter();
+    //-----------------------------------------
+};
+
+PyTypeObject EventPropertyIterator::Type = {
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "meds_reader.EventPropertyIterator",
+    .tp_basicsize = sizeof(EventPropertyIterator),
+    .tp_itemsize = 0,
+    .tp_dealloc = convert_to_cfunc<&EventPropertyIterator::dealloc>(),
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = PyDoc_STR("EventPropertyIterator"),
+    .tp_iter = convert_to_cfunc<&EventPropertyIterator::iter>(),
+    .tp_iternext = convert_to_cfunc<&EventPropertyIterator::next>(),
     .tp_init = nullptr,
     .tp_alloc = nullptr,
     .tp_new = nullptr,
@@ -299,7 +344,6 @@ Patient::~Patient() {
 }
 
 PyObject* Patient::get_property(PyObject* property_name, Event* event_ptr) {
-    size_t event_index = event_ptr - events;
     // Needs to get the property
     ssize_t index = patient_database->get_property_index(property_name);
 
@@ -309,6 +353,12 @@ PyObject* Patient::get_property(PyObject* property_name, Event* event_ptr) {
                             "Could not find key %U in meds_reader.Event",
                             property_name);
     }
+
+    return get_property(index, event_ptr);
+};
+
+PyObject* Patient::get_property(size_t index, Event* event_ptr) {
+    size_t event_index = event_ptr - events;
 
     auto& val = saved_properties[index];
 
@@ -324,6 +374,17 @@ PyObject* Patient::get_property(PyObject* property_name, Event* event_ptr) {
 
     return val[event_index].copy();
 };
+
+uint64_t Patient::get_null_map(Event* event_ptr) {
+    size_t event_index = event_ptr - events;
+
+    if (null_map.size() == 0) {
+        null_map =
+            patient_database->get_null_map(patient_offset, patient_length);
+    }
+
+    return null_map[event_index];
+}
 
 PyObject* Patient::create(const fast_shared_ptr<PatientDatabase>& pd,
                           int32_t patient_offset, PyObject* patient_id) {
@@ -391,6 +452,8 @@ inline PyObject* Event::getattro(PyObject* key) {
     return patient->get_property(key_wrapper.borrow(), this);
 }
 
+PyObject* Event::iter() { return new EventPropertyIterator(patient, this); }
+
 PyObject* Event::str() {
     PyObjectWrapper time_str{PyUnicode_FromString("time")};
     PyObjectWrapper code_str{PyUnicode_FromString("code")};
@@ -416,6 +479,42 @@ PyObject* Event::str() {
     return py_string;
 }
 
+EventPropertyIterator::EventPropertyIterator(const fast_shared_ptr<Patient>& pd,
+                                             Event* e)
+    : patient(pd), event(e) {
+    PyObject_Init(static_cast<PyObject*>(this), &Type);
+    current_index = patient->get_null_map(e);
+}
+
+void EventPropertyIterator::dealloc() { delete this; }
+
+inline PyObject* EventPropertyIterator::next() {
+    if (current_index == 0) {
+        return PyErr_Format(PyExc_StopIteration,
+                            "Exceeded the number of properties in events");
+    } else {
+        static_assert(sizeof(uint64_t) == sizeof(unsigned long));
+        int num_zeros = __builtin_ctzl(current_index);
+        uint64_t mask = 1;
+        mask <<= (uint64_t)num_zeros;
+        current_index &= ~mask;
+
+        PyObject* property_name =
+            patient->patient_database->get_property_name(num_zeros);
+
+        PyObject* property = patient->get_property(num_zeros, event);
+
+        PyObject* result = PyTuple_Pack(2, property_name, property);
+
+        return result;
+    }
+}
+
+PyObject* EventPropertyIterator::iter() {
+    Py_INCREF(this);
+    return this;
+}
+
 PatientDatabase::PatientDatabase(std::string_view dir)
     : root_directory(dir),
       patient_id_file(root_directory / "patient_id"),
@@ -433,7 +532,12 @@ PatientDatabase::PatientDatabase(std::string_view dir)
             version_file >> version;
 
             if (version != CURRENT_BINARY_VERSION) {
-                throw std::runtime_error("The file you are trying to read has a binary version of " + std::to_string(version) + " while this version of meds_reader only supports binary version " + std::to_string(CURRENT_BINARY_VERSION));
+                throw std::runtime_error(
+                    "The file you are trying to read has a binary version of " +
+                    std::to_string(version) +
+                    " while this version of meds_reader only supports binary "
+                    "version " +
+                    std::to_string(CURRENT_BINARY_VERSION));
             }
         }
 
@@ -441,7 +545,7 @@ PatientDatabase::PatientDatabase(std::string_view dir)
 
         std::string_view current = property_file.bytes();
 
-        std::vector<PyObject*> property_names;
+        std::vector<PyObject*> property_name_pointers;
 
         py_properties = PyDict_New();
 
@@ -470,24 +574,29 @@ PatientDatabase::PatientDatabase(std::string_view dir)
             PyObjectWrapper dtype =
                 create_pyarrow_dtype(pyarrow.borrow(), type);
 
-            property_names.emplace_back(property_name.borrow());
-
             if (PyDict_SetItem(py_properties.borrow(), property_name.borrow(),
                                dtype.borrow()) == -1) {
                 throw std::runtime_error(
                     "Could not insert properties in map ...");
             }
+
+            property_name_pointers.emplace_back(property_name.borrow());
+            property_names.emplace_back(std::move(property_name));
         }
 
         property_accessors.resize(properties.size());
 
-        property_map.emplace(property_names);
+        property_map.emplace(property_name_pointers);
     }
 
     num_patients = patient_id_file.data<int64_t>().size();
 }
 
 size_t PatientDatabase::get_num_properties() { return properties.size(); }
+
+PyObject* PatientDatabase::get_property_name(size_t property_name_index) {
+    return property_names[property_name_index].copy();
+}
 
 ssize_t PatientDatabase::get_property_index(PyObject* property_name) {
     PyUnicode_InternInPlace(&property_name);
@@ -501,6 +610,15 @@ std::vector<PyObjectWrapper> PatientDatabase::get_property_data(
             root_directory, properties[index].first, properties[index].second);
     }
     return property_accessors[index]->get_property_data(patient_offset, length);
+}
+
+std::vector<uint64_t> PatientDatabase::get_null_map(int32_t patient_offset,
+                                                    int32_t length) {
+    if (!null_map_reader) {
+        null_map_reader =
+            create_null_map_reader(root_directory, properties.size());
+    }
+    return null_map_reader->get_null_map(patient_offset, length);
 }
 
 int64_t PatientDatabase::get_patient_id(int32_t patient_offset) const {
@@ -710,6 +828,11 @@ PyMODINIT_FUNC PyInit__meds_reader(void) {
     }
 
     if (PyModule_AddType(m, &Event::Type) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    if (PyModule_AddType(m, &EventPropertyIterator::Type) < 0) {
         Py_DECREF(m);
         return NULL;
     }

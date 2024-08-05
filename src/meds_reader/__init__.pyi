@@ -72,7 +72,7 @@ class Event:
         ...
 
     def __iter__(self) -> Iterator[Tuple[str, Any]]:
-        """Iterate through the non-null properties for this type."""
+        """Iterate through the non-None properties for this type."""
         ...
 
 __all__ = ["PatientDatabase", "Patient", "Event"]

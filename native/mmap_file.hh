@@ -34,6 +34,19 @@ class MmapFile {
         }
     }
 
+    MmapFile(MmapFile&& other) {
+        fp = other.fp;
+        data_size = other.data_size;
+        data_pointer = other.data_pointer;
+
+        other.fp = 0;
+        other.data_size = 0;
+        other.data_pointer = nullptr;
+    }
+
+    MmapFile(const MmapFile&) = delete;
+    MmapFile& operator=(const MmapFile& other) = delete;
+
     std::string_view bytes() const {
         return std::string_view((const char*)data_pointer, data_size);
     }
@@ -45,8 +58,10 @@ class MmapFile {
     }
 
     ~MmapFile() {
-        munmap(data_pointer, data_size);
-        close(fp);
+        if (data_pointer != nullptr) {
+            munmap(data_pointer, data_size);
+            close(fp);
+        }
     }
 
    private:
