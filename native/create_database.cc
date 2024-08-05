@@ -1161,8 +1161,6 @@ void process_string_property(
                 }
             });
 
-    all_lengths.back().second.push_back(current_offset);
-
     std::ofstream data_file((string_path / "data"), std::ios_base::out |
                                                         std::ios_base::binary |
                                                         std::ios_base::trunc);
@@ -1174,6 +1172,8 @@ void process_string_property(
         const char* buffer = (const char*)item.second.data();
         data_file.write(buffer, num_to_write);
     }
+
+    data_file.write((const char*) &current_offset, sizeof(current_offset));
 
     for (const auto& entry : work_entries) {
         std::filesystem::path entry_path =
@@ -1507,8 +1507,6 @@ void process_primitive_property(
                 }
             });
 
-    all_lengths.back().second.push_back(current_offset);
-
     std::ofstream data_file((string_path / "data"), std::ios_base::out |
                                                         std::ios_base::binary |
                                                         std::ios_base::trunc);
@@ -1519,6 +1517,8 @@ void process_primitive_property(
         const char* buffer = (const char*)item.second.data();
         data_file.write(buffer, num_to_write);
     }
+
+    data_file.write((const char*) &current_offset, sizeof(current_offset));
 
     for (const auto& entry : work_entries) {
         std::filesystem::path entry_path =
@@ -1891,8 +1891,6 @@ void process_time_property(
                 }
             });
 
-    all_lengths.back().second.push_back(current_offset);
-
     std::ofstream data_file((string_path / "data"), std::ios_base::out |
                                                         std::ios_base::binary |
                                                         std::ios_base::trunc);
@@ -1903,6 +1901,8 @@ void process_time_property(
         const char* buffer = (const char*)item.second.data();
         data_file.write(buffer, num_to_write);
     }
+
+    data_file.write((const char*) &current_offset, sizeof(current_offset));
 
     for (const auto& entry : work_entries) {
         std::filesystem::path entry_path =
@@ -2491,14 +2491,6 @@ void process_null_map(
                        }
                    });
 
-    for (size_t i = all_lengths.size() - 1; i >= 0; i--) {
-        auto& val = all_lengths[i];
-        if (val.second.size() != 0) {
-            val.second.push_back(current_offset);
-            break;
-        }
-    }
-
     std::ofstream data_file((string_path / "data"), std::ios_base::out |
                                                         std::ios_base::binary |
                                                         std::ios_base::trunc);
@@ -2512,6 +2504,8 @@ void process_null_map(
         const char* buffer = (const char*)item.second.data();
         data_file.write(buffer, num_to_write);
     }
+
+    data_file.write((const char*)&current_offset, sizeof(current_offset));
 
     for (int i = 0; i < num_threads; i++) {
         std::filesystem::path entry_path =
