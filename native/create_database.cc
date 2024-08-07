@@ -1173,7 +1173,7 @@ void process_string_property(
         data_file.write(buffer, num_to_write);
     }
 
-    data_file.write((const char*) &current_offset, sizeof(current_offset));
+    data_file.write((const char*)&current_offset, sizeof(current_offset));
 
     for (const auto& entry : work_entries) {
         std::filesystem::path entry_path =
@@ -1518,7 +1518,7 @@ void process_primitive_property(
         data_file.write(buffer, num_to_write);
     }
 
-    data_file.write((const char*) &current_offset, sizeof(current_offset));
+    data_file.write((const char*)&current_offset, sizeof(current_offset));
 
     for (const auto& entry : work_entries) {
         std::filesystem::path entry_path =
@@ -1902,7 +1902,7 @@ void process_time_property(
         data_file.write(buffer, num_to_write);
     }
 
-    data_file.write((const char*) &current_offset, sizeof(current_offset));
+    data_file.write((const char*)&current_offset, sizeof(current_offset));
 
     for (const auto& entry : work_entries) {
         std::filesystem::path entry_path =
