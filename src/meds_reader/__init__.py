@@ -199,13 +199,12 @@ class _PatientDatabaseWrapper:
 class PatientDatabase:
     def __init__(self, path_to_database: str, num_threads: int = 1) -> None:
         self.path_to_database = path_to_database
-        self._num_threads = 1
+        self._num_threads = num_threads
         self._database = _meds_reader.PatientDatabase(path_to_database)
         self._all_patient_ids: np.ndarray = np.array(list(self._database))
 
         if num_threads != 1:
             self._processes: Optional[List[SpawnProcess]] = []
-            self._num_threads = num_threads
 
             self._input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]] = (
                 mp.SimpleQueue()

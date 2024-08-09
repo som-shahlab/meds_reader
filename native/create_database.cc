@@ -363,7 +363,7 @@ void iterate_strings_helper(
     std::vector<int> columns = {(int)column};
 
     size_t next_patient_index = 0;
-    size_t remaining_events;
+    size_t remaining_events = 0;
     bool has_event = false;
 
     absl::flat_hash_map<std::string, uint32_t> per_patient_values;
@@ -2168,9 +2168,9 @@ auto context_deleter = [](ZSTD_DCtx* context) { ZSTD_freeDCtx(context); };
 
 struct PropertyNullReader {
     PropertyNullReader(const std::filesystem::path& property_path,
-                       std::string property_name)
-        : zdict_file(property_path / "zdict"),
-          data_file(property_path / "data"),
+                       std::string property_name, MmapFile& zf, MmapFile& df)
+        : zdict_file(zf),
+          data_file(df),
           context(ZSTD_createDCtx(), context_deleter),
           is_time(property_name == "time") {
         if (zdict_file.bytes().size() != 0) {
@@ -2261,9 +2261,9 @@ struct PropertyNullReader {
         }
     }
 
-    MmapFile zdict_file;
-    MmapFile data_file;
 
+    MmapFile& zdict_file;
+    MmapFile& data_file;
     std::unique_ptr<ZSTD_DCtx, decltype(context_deleter)> context;
     bool is_time;
 };
@@ -2401,12 +2401,21 @@ void process_null_map(
     int num_patients) {
     MmapFile length_file(destination_path / "meds_reader.length");
     absl::Span<const int32_t> patient_lengths = length_file.data<int32_t>();
+    
+    std::vector<MmapFile> zdict_files;
+    std::vector<MmapFile> data_files;
+        
+    for (const auto& entry : properties) {
+        zdict_files.emplace_back(destination_path / entry.first / "zdict");
+        data_files.emplace_back(destination_path / entry.first / "data");
+    }
 
     std::vector<std::vector<PropertyNullReader>> property_readers(num_threads);
     for (int i = 0; i < num_threads; i++) {
-        for (const auto& entry : properties) {
+        for (size_t j = 0; j < properties.size(); j++) {
+const auto& entry = properties[j];
             property_readers[i].emplace_back(destination_path / entry.first,
-                                             entry.first);
+                                             entry.first, zdict_files[j], data_files[j]);
         }
     }
 
