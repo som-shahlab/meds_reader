@@ -125,7 +125,6 @@ def _transform_meds_dataset_worker(
 
             updated_patient = transform_func(patient)
             if updated_patient is not None:
-                print("Transform", patient, _convert_patient_to_dict(updated_patient))
                 transformed_events.extend(_convert_patient_to_dict(updated_patient))
 
         for row_group in range(0, reader.num_row_groups):
@@ -148,9 +147,9 @@ def _transform_meds_dataset_worker(
                 if current_patient_id is not None:
                     flush_patient()
 
-            print(transformed_events)
             new_table = pa.Table.from_pylist(transformed_events, schema=schema)
             writer.write_table(new_table)
+            transformed_events = []
 
 
 def transform_meds_dataset(

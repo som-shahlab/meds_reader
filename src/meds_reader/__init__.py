@@ -281,7 +281,7 @@ class PatientDatabase:
 
     def terminate(self) -> None:
         """Close the pool"""
-        if self._num_threads != 1:
+        if self._num_threads != 1 and getattr(self, "_processes", None) is not None:
             assert self._processes is not None
             for _ in self._processes:
                 self._input_queue.put(None)
@@ -292,7 +292,7 @@ class PatientDatabase:
             self._processes = None
 
     def __del__(self):
-        if self._num_threads != 1 and self._processes is not None:
+        if self._num_threads != 1 and getattr(self, "_processes", None) is not None:
             warnings.warn(
                 "PatientDatabase had a thread pool attached, but was never shut down"
             )
