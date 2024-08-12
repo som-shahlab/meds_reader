@@ -382,7 +382,8 @@ void sort_concatenate_shards(int i, const std::filesystem::path& root_path,
 
 size_t get_num_shards(int num_threads, size_t estimated_size) {
     int max_size_per_shard = 2000000000;
-    int num_shards = (estimated_size + max_size_per_shard - 1) / max_size_per_shard;
+    int num_shards =
+        (estimated_size + max_size_per_shard - 1) / max_size_per_shard;
 
     num_shards = 30;
 

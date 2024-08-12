@@ -63,9 +63,7 @@ class cmake_build_ext(build_ext):
                 extra_args.extend(["--distdir", source_env["DISTDIR"]])
 
             if source_env.get("MACOSX_DEPLOYMENT_TARGET"):
-                extra_args.extend(
-                    ["--macos_minimum_os", source_env["MACOSX_DEPLOYMENT_TARGET"]]
-                )
+                extra_args.extend(["--macos_minimum_os", source_env["MACOSX_DEPLOYMENT_TARGET"]])
 
             if source_env.get("DISABLE_CPU_ARCH") or not can_build_simple(
                 sourcedir=sourcedir, env=env, bazel_extra_args=bazel_extra_args
@@ -105,9 +103,7 @@ class cmake_build_ext(build_ext):
             )
 
             for ext in bazel_extensions:
-                parent_directory = os.path.abspath(
-                    os.path.join(self.get_ext_fullpath(ext.name), os.pardir)
-                )
+                parent_directory = os.path.abspath(os.path.join(self.get_ext_fullpath(ext.name), os.pardir))
 
                 os.makedirs(parent_directory, exist_ok=True)
 
@@ -122,9 +118,7 @@ class cmake_build_ext(build_ext):
 setuptools.setup(
     ext_modules=[
         BazelExtension("meds_reader._meds_reader", "_meds_reader.so", "native"),
-        BazelExtension(
-            "meds_reader.meds_reader_convert", "meds_reader_convert", "native"
-        ),
+        BazelExtension("meds_reader.meds_reader_convert", "meds_reader_convert", "native"),
     ],
     cmdclass={"build_ext": cmake_build_ext},
     zip_safe=False,

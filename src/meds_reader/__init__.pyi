@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Mapping, Iterator, Sequence, Collection, List, Callable, Tuple
-from typing import Any, Optional, TypeVar
-import meds
 import datetime
+from typing import Any, Callable, Collection, Iterator, List, Mapping, Optional, Sequence, Tuple, TypeVar
+
+import meds
 import pyarrow as pa
 
 A = TypeVar("A")

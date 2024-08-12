@@ -15,7 +15,7 @@ cc_library(
     hdrs=["create_database.hh"],
     deps=[
         ":dtype",
-        ":arrow", 
+        ":arrow",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/container:flat_hash_map",
         "@concurrentqueue",
@@ -63,7 +63,7 @@ cc_library(
     name="property_reader",
     hdrs=["property_reader.hh"],
     srcs=["property_reader.cc"],
-    deps=[":pyutils", ":dtype", ":zstd", ":streamvbyte", 
+    deps=[":pyutils", ":dtype", ":zstd", ":streamvbyte",
         "@com_google_absl//absl/time", "@com_google_absl//absl/types:span", ":mmap_file"]
 )
 
@@ -139,7 +139,7 @@ cmake(
         "CMAKE_CXX_FLAGS": "-fPIC -fvisibility=hidden",
         "CMAKE_INSTALL_LIBDIR": "lib",
 	    "CMAKE_OSX_DEPLOYMENT_TARGET": "12",
-        
+
         "ZSTDLIB_VISIBLE": "hidden",
         "ZSTDERRORLIB_VISIBLE": "hidden",
         "ZDICTLIB_VISIBLE": "hidden",

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import meds_reader
 import datetime
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+
+import meds_reader
 
 class MutablePatient(meds_reader.Patient):
     """A patient consists of a patient_id and a sequence of Events"""
@@ -18,9 +19,7 @@ class MutablePatient(meds_reader.Patient):
 class MutableEvent(meds_reader.Event):
     """An event represents a single unit of information about a patient. It contains a time and code, and potentially more properties."""
 
-    def __init__(
-        self, time: datetime.datetime, code: str, properties: Dict[str, Any] = {}
-    ): ...
+    def __init__(self, time: datetime.datetime, code: str, properties: Dict[str, Any] = {}): ...
 
     time: datetime.datetime
     "The time the event occurred"

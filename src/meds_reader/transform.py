@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import datetime
+import glob
 import multiprocessing
-from multiprocessing.context import SpawnProcess
+import os
 import pickle
 import shutil
+from multiprocessing.context import SpawnProcess
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
-import os
-import glob
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-
 
 mp = multiprocessing.get_context("spawn")
 
@@ -33,16 +32,17 @@ class MutablePatient:
     events: List[MutableEvent]
     "Items that have happened to a patient"
 
-    def __eq__(self, other: MutablePatient) -> bool:
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MutablePatient):
+            return NotImplemented
         return (self.patient_id, self.events) == (other.patient_id, other.events)
 
 
 class MutableEvent:
-    """An event represents a single unit of information about a patient. It contains a time and code, and potentially more properties."""
+    """An event represents a single unit of information about a patient.
+    It contains a time and code, and potentially more properties."""
 
-    def __init__(
-        self, time: datetime.datetime, code: str, properties: Dict[str, Any] = {}
-    ):
+    def __init__(self, time: datetime.datetime, code: str, properties: Dict[str, Any] = {}):
         if properties == {}:
             properties = {}
 
@@ -68,13 +68,13 @@ class MutableEvent:
         """Iterate over all non-None properties within this event."""
         yield from self.properties.items()
 
-    def __eq__(self, other: MutableEvent) -> bool:
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MutableEvent):
+            return NotImplemented
         return self.properties == other.properties
 
 
-def _convert_dict_to_patient(
-    patient_id, events: List[Mapping[str, Any]]
-) -> MutablePatient:
+def _convert_dict_to_patient(patient_id, events: List[Mapping[str, Any]]) -> MutablePatient:
     def create_event(event_dict: Mapping[str, Any]) -> MutableEvent:
         time = event_dict["time"]
         code = event_dict["code"]
@@ -114,9 +114,9 @@ def _transform_meds_dataset_worker(
         reader = pq.ParquetFile(source_path)
 
         current_patient_id = None
-        current_events = None
+        current_events: Optional[List[Mapping[str, Any]]] = None
 
-        transformed_events = []
+        transformed_events: List[Mapping[str, Any]] = []
 
         def flush_patient():
             assert current_patient_id is not None
@@ -130,10 +130,7 @@ def _transform_meds_dataset_worker(
         for row_group in range(0, reader.num_row_groups):
             original_table = reader.read_row_group(row_group)
             for event_dict in original_table.to_pylist():
-                if (
-                    current_patient_id is None
-                    or event_dict["patient_id"] != current_patient_id
-                ):
+                if current_patient_id is None or event_dict["patient_id"] != current_patient_id:
                     if current_patient_id is not None:
                         flush_patient()
 
@@ -165,11 +162,7 @@ def transform_meds_dataset(
         os.path.join(target_dataset_path, "metadata"),
     )
 
-    source_parquet_files = list(
-        glob.glob(
-            os.path.join(source_dataset_path, "data", "**", "*.parquet"), recursive=True
-        )
-    )
+    source_parquet_files = list(glob.glob(os.path.join(source_dataset_path, "data", "**", "*.parquet"), recursive=True))
 
     assert len(source_parquet_files) > 0
 
