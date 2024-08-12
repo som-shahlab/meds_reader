@@ -13,7 +13,7 @@ Command Line Program
     :param str source_meds_path: The path to the source MEDS dataset.
     :param str destination_path: The path of where to write the resulting meds_reader PatientDatabase.
     :param int num_threads: The number of threads to use.
-    
+
 -----
 
 Python Module

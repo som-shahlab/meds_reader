@@ -1,35 +1,26 @@
 from __future__ import annotations
 
+import argparse
+import collections
+import glob
 import importlib.resources
-from multiprocessing.context import SpawnProcess
+import multiprocessing
 import multiprocessing.spawn
 import os
-import sys
-import multiprocessing
-import numpy as np
 import pickle
-import warnings
-import pyarrow.parquet as pq
-import pyarrow as pa
-import argparse
 import random
-import glob
-import collections
+import sys
+import warnings
+from multiprocessing.context import SpawnProcess
+from typing import Any, Callable, Iterator, List, Optional, Sequence, Tuple, TypeVar, cast
 
-from typing import (
-    List,
-    Mapping,
-    Optional,
-    Tuple,
-    Any,
-    Sequence,
-    TypeVar,
-    Callable,
-    Iterator,
-    cast,
-)
+import numpy as np
+import pyarrow.parquet as pq
 
-from . import _meds_reader
+import meds_reader._meds_reader as _meds_reader
+
+Patient = _meds_reader.Patient
+Event = _meds_reader.Event
 
 __doc__ = _meds_reader.__doc__
 
@@ -41,15 +32,9 @@ mp = multiprocessing.get_context("spawn")
 
 
 def meds_reader_verify():
-    parser = argparse.ArgumentParser(
-        description="Verify that a meds_reader dataset matches a source dataset"
-    )
-    parser.add_argument(
-        "meds_dataset", type=str, help="A MEDS dataset to compare against"
-    )
-    parser.add_argument(
-        "meds_reader_database", type=str, help="A meds_reader database to verify"
-    )
+    parser = argparse.ArgumentParser(description="Verify that a meds_reader dataset matches a source dataset")
+    parser.add_argument("meds_dataset", type=str, help="A MEDS dataset to compare against")
+    parser.add_argument("meds_reader_database", type=str, help="A meds_reader database to verify")
 
     args = parser.parse_args()
 
@@ -57,18 +42,12 @@ def meds_reader_verify():
 
     random.seed(3452342)
 
-    files = sorted(
-        glob.glob(
-            os.path.join(args.meds_dataset, "data", "**", "*.parquet"), recursive=True
-        )
-    )
+    files = sorted(glob.glob(os.path.join(args.meds_dataset, "data", "**", "*.parquet"), recursive=True))
 
     file = random.choice(files)
     reference = pq.ParquetFile(file)
 
-    row_group = reference.read_row_group(
-        random.randint(0, reference.num_row_groups - 1)
-    )
+    row_group = reference.read_row_group(random.randint(0, reference.num_row_groups - 1))
 
     custom_fields = sorted(set(row_group.schema.names) - {"patient_id"})
     all_properties = {k: row_group.schema.field(k).type for k in custom_fields}
@@ -104,9 +83,10 @@ def meds_reader_verify():
                 else:
                     expected = pyarrow_event["properties"][property]
 
-                assert (
-                    actual == expected
-                ), f"Got {actual} expected {expected} for {reader_patient} {property} {pyarrow_event['time']} {reader_event.time}"
+                assert actual == expected, (
+                    f"Got {actual} expected {expected} for {reader_patient} {property}"
+                    f" {pyarrow_event['time']} {reader_event.time}"
+                )
 
     for patient_id, pyarrow_patient in patient_objects.items():
         reader_patient = database[patient_id]
@@ -159,7 +139,7 @@ class _PatientDatabaseWrapper:
         """The number of patients in the database"""
         return len(self._selected_patients)
 
-    def __getitem__(self, patient_id: int) -> Patient:
+    def __getitem__(self, patient_id: int) -> Any:
         """Retrieve a single patient from the database"""
         return self._db[patient_id]
 
@@ -167,11 +147,9 @@ class _PatientDatabaseWrapper:
         return iter(self._selected_patients)
 
     def filter(self, patient_ids: Sequence[int]):
-        return cast(
-            PatientDatabase, _PatientDatabaseWrapper(self._db, np.sort(patient_ids))
-        )
+        return cast(PatientDatabase, _PatientDatabaseWrapper(self._db, np.sort(patient_ids)))
 
-    def map(self, map_func: Callable[[Iterator[Patient]], A]) -> Iterator[A]:
+    def map(self, map_func: Callable[[Iterator[Any]], A]) -> Iterator[A]:
         return self._db._map_fast(map_func, self._selected_patients)
 
 
@@ -185,9 +163,7 @@ class PatientDatabase:
         if num_threads != 1:
             self._processes: Optional[List[SpawnProcess]] = []
 
-            self._input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]] = (
-                mp.SimpleQueue()
-            )
+            self._input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]] = mp.SimpleQueue()
             self._result_queue: multiprocessing.SimpleQueue[Any] = mp.SimpleQueue()
 
             for _ in range(num_threads):
@@ -212,7 +188,7 @@ class PatientDatabase:
         """The number of patients in the database"""
         return len(self._database)
 
-    def __getitem__(self, patient_id: int) -> Patient:
+    def __getitem__(self, patient_id: int) -> Any:
         """Retrieve a single patient from the database"""
         return self._database[int(patient_id)]
 
@@ -229,14 +205,12 @@ class PatientDatabase:
 
     def map(
         self,
-        map_func: Callable[[Iterator[Patient]], A],
+        map_func: Callable[[Iterator[Any]], A],
     ) -> Iterator[A]:
         """Apply the provided map function to the database"""
         return self._map_fast(map_func, self._all_patient_ids)
 
-    def _map_fast(
-        self, map_func: Callable[[Iterator[Patient]], A], patient_ids: np.ndarray
-    ) -> Iterator[A]:
+    def _map_fast(self, map_func: Callable[[Iterator[Any]], A], patient_ids: np.ndarray) -> Iterator[A]:
         """Apply the provided map function to the database"""
         if self._num_threads != 1:
             patients_per_part = np.array_split(patient_ids, self._num_threads)
@@ -248,13 +222,7 @@ class PatientDatabase:
 
             return (self._result_queue.get() for _ in patients_per_part)
         else:
-            return iter(
-                (
-                    map_func(
-                        self._database[int(patient_id)] for patient_id in patient_ids
-                    ),
-                )
-            )
+            return iter((map_func(self._database[int(patient_id)] for patient_id in patient_ids),))
 
     def terminate(self) -> None:
         """Close the pool"""
@@ -270,19 +238,13 @@ class PatientDatabase:
 
     def __del__(self):
         if self._num_threads != 1 and getattr(self, "_processes", None) is not None:
-            warnings.warn(
-                "PatientDatabase had a thread pool attached, but was never shut down"
-            )
+            warnings.warn("PatientDatabase had a thread pool attached, but was never shut down")
 
     def __enter__(self) -> PatientDatabase:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.terminate()
-
-
-Patient = _meds_reader.Patient
-Event = _meds_reader.Event
 
 
 __all__ = ["PatientDatabase", "Patient", "Event"]

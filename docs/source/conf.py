@@ -1,3 +1,7 @@
+import os
+import shutil
+import sys
+
 # Configuration file for the Sphinx documentation builder.
 
 # -- Project information
@@ -37,11 +41,6 @@ html_theme_options = {
 autodoc_member_order = "bysource"
 autoclass_content = "init"
 autodoc_typehints_format = "fully-qualified"
-
-
-import shutil
-import sys
-import os
 
 shutil.copyfile("../../src/meds_reader/__init__.pyi", "meds_reader.py")
 sys.path.insert(0, os.path.abspath("."))

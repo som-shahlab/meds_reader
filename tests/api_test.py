@@ -1,14 +1,15 @@
-import meds_reader
-import pyarrow as pa
-import pyarrow.parquet as pq
+import datetime
+import json
 import os
 import subprocess
-import json
-import datetime
+
 import meds
-import meds_reader.transform
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
+import meds_reader
+import meds_reader.transform
 
 metadata = {"dataset_name": "Testing Dataset!"}
 
@@ -74,9 +75,7 @@ def meds_dataset(tmpdir: str):
         ("numeric", pa.float32()),
     ]
 
-    table = pa.Table.from_pylist(
-        entries, schema=meds.schema.data_schema(custom_properties)
-    )
+    table = pa.Table.from_pylist(entries, schema=meds.schema.data_schema(custom_properties))
 
     pq.write_table(table, os.path.join(data_dir, "entries.parquet"))
     return os.path.join(tmpdir, "meds")
@@ -96,9 +95,7 @@ def patient_database(tmpdir: str, meds_dataset: str):
 
 
 def test_metadata(patient_database):
-    with open(
-        os.path.join(patient_database.path_to_database, "metadata", "dataset.json")
-    ) as f:
+    with open(os.path.join(patient_database.path_to_database, "metadata", "dataset.json")) as f:
         loaded_metadata = json.load(f)
     assert loaded_metadata == metadata
 
@@ -146,7 +143,7 @@ def test_lookup(patient_database):
     assert p.events[0].code == "Whatever"
     assert p.events[1].code == "Whatever2"
 
-    assert p.events[0].time == None
+    assert p.events[0].time is None
     assert p.events[1].time == datetime.datetime(2013, 10, 2)
 
     assert p.events[0].other == "need"
@@ -185,7 +182,7 @@ def test_filter(patient_database):
     assert p.events[0].code == "Whatever"
     assert p.events[1].code == "Whatever2"
 
-    assert p.events[0].time == None
+    assert p.events[0].time is None
     assert p.events[1].time == datetime.datetime(2013, 10, 2)
 
     assert p.events[0].other == "need"
@@ -211,9 +208,7 @@ def test_transform(tmpdir: str, meds_dataset: str):
     target = os.path.join(tmpdir, "modified_meds")
     meds_reader_dir = os.path.join(tmpdir, "modified_meds_reader")
 
-    meds_reader.transform.transform_meds_dataset(
-        meds_dataset, target, _example_transform, 2
-    )
+    meds_reader.transform.transform_meds_dataset(meds_dataset, target, _example_transform, 2)
 
     subprocess.run(
         ["meds_reader_convert", target, meds_reader_dir, "--num_threads", "4"],

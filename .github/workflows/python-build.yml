@@ -46,7 +46,7 @@ jobs:
   make_artifact:
     name: Make Artifact
     runs-on: ubuntu-latest
-    needs: 
+    needs:
       - build_wheels
       - make_sdist
     steps:
@@ -55,7 +55,7 @@ jobs:
         with:
           name: artifact
           pattern: artifact-*
-  
+
   publish-to-pypi:
     name: >-
       Publish Python 🐍 distribution 📦 to PyPI
@@ -97,7 +97,7 @@ jobs:
       with:
         name: artifact
         path: dist
-        
+
     - name: Sign the dists with Sigstore
       uses: sigstore/gh-action-sigstore-python@v2.1.1
       with:
