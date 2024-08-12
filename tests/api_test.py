@@ -171,9 +171,6 @@ def test_lookup(patient_database):
 
 
 def test_filter(patient_database):
-    with pytest.raises(ValueError):
-        sub_database = patient_database.filter([32, 45345])
-
     sub_database = patient_database.filter([32])
 
     assert len(sub_database) == 1

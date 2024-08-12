@@ -145,24 +145,6 @@ def _runner(
         result_queue.put(result)
 
 
-def _filter_patients(
-    all_patient_ids: np.ndarray, filter_list: Sequence[int]
-) -> np.ndarray:
-    found_patients = all_patient_ids[np.isin(all_patient_ids, filter_list)]
-    if len(found_patients) != len(filter_list):
-        if len(set(filter_list)) != len(filter_list):
-            raise ValueError(
-                f"Called filter with a set of patient ids with duplicates {len(set(filter_list))} {len(filter_list)}"
-            )
-
-        missing_patients = [a for a in filter_list if a not in all_patient_ids]
-        raise ValueError(
-            f"Called filter, but couldn't find patients {repr(missing_patients)} {len(filter_list)} {len(found_patients)}"
-        )
-
-    return found_patients
-
-
 class _PatientDatabaseWrapper:
     def __init__(self, db: PatientDatabase, patients_ids: np.ndarray):
         self._db = db
@@ -186,10 +168,7 @@ class _PatientDatabaseWrapper:
 
     def filter(self, patient_ids: Sequence[int]):
         return cast(
-            PatientDatabase,
-            _PatientDatabaseWrapper(
-                self._db, _filter_patients(self._selected_patients, patient_ids)
-            ),
+            PatientDatabase, _PatientDatabaseWrapper(self._db, np.sort(patient_ids))
         )
 
     def map(self, map_func: Callable[[Iterator[Patient]], A]) -> Iterator[A]:
@@ -245,9 +224,7 @@ class PatientDatabase:
         """Filter to a provided set of patient ids"""
         return cast(
             PatientDatabase,
-            _PatientDatabaseWrapper(
-                self, _filter_patients(self._all_patient_ids, patient_ids)
-            ),
+            _PatientDatabaseWrapper(self, np.sort(patient_ids)),
         )
 
     def map(
