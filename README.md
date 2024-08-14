@@ -6,9 +6,6 @@ meds_reader is a fast and easy-to-use library for reading and processing patient
 
 Inspired by HuggingFace Datasets, meds_reader transforms MEDS datasets into collections of Python objects, that can then be processed using normal Python functions.
 
-> [!WARNING]
-> meds_reader is currently in early stage development and the API is still in flux. Please leave feedback and use at your own risk!
- 
 ### Example
 
 ```bash
