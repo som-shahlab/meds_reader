@@ -13,6 +13,7 @@ dependencies = [
   "pyarrow >= 9",
   "meds>=0.3,<0.4",
   "numpy>=1.16,<2",
+  "pandas>="2.2",
 ]
 
 [tool.setuptools_scm]
