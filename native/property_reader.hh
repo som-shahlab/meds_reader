@@ -12,8 +12,8 @@
 #include "pyutils.hh"
 
 struct PropertyReader {
-    virtual std::vector<PyObjectWrapper> get_property_data(
-        int32_t patient_offset, int32_t length) = 0;
+    virtual void get_property_data(
+        int32_t patient_offset, int32_t length, PyObject** result) = 0;
     virtual ~PropertyReader(){};
 };
 
@@ -22,8 +22,8 @@ std::unique_ptr<PropertyReader> create_property_reader(
     const std::string& property_name, DataType property_type);
 
 struct NullMapReader {
-    virtual std::vector<uint64_t> get_null_map(int32_t patient_offset,
-                                               int32_t length) = 0;
+    virtual void get_null_map(int32_t patient_offset,
+                                               int32_t length, uint64_t* result) = 0;
     virtual ~NullMapReader(){};
 };
 

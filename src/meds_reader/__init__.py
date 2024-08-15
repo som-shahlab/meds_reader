@@ -15,6 +15,7 @@ from multiprocessing.context import SpawnProcess
 from typing import Any, Callable, Iterator, List, Optional, Sequence, Tuple, TypeVar, cast
 
 import numpy as np
+import pandas as pd
 import pyarrow.parquet as pq
 
 import meds_reader._meds_reader as _meds_reader
@@ -26,7 +27,7 @@ __doc__ = _meds_reader.__doc__
 
 A = TypeVar("A")
 
-WorkEntry = Tuple[bytes, np.ndarray]
+WorkEntry = Tuple[bytes, np.ndarray | pd.DataFrame]
 
 mp = multiprocessing.get_context("spawn")
 
@@ -104,6 +105,21 @@ def meds_reader_convert():
                 os.execv(executible, sys.argv)
 
 
+def _row_generator(database: _meds_reader.PatientDatabase, data: pd.DataFrame):
+    current_index = None
+    current_rows: List[Any] = []
+    for row in data.itertuples(index=False):
+        if current_index is None:
+            current_index = int(row.patient_id)
+        if current_index is not None and current_index != int(row.patient_id):
+            yield (database[current_index], current_rows)
+            current_rows, current_index = [row], int(row.patient_id)
+        else:
+            current_rows.append(row)
+    if current_index is not None:
+        yield (database[current_index], current_rows)
+
+
 def _runner(
     path_to_database: str,
     input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]],
@@ -120,7 +136,12 @@ def _runner(
         map_func = pickle.loads(map_func_str)
         del map_func_str
 
-        result = map_func(database[int(patient_id)] for patient_id in patient_ids)
+        if isinstance(patient_ids, pd.DataFrame):
+            result = map_func(_row_generator(database, patient_ids))
+        elif isinstance(patient_ids, np.ndarray):
+            result = map_func(database[int(patient_id)] for patient_id in patient_ids)
+        else:
+            raise RuntimeError("Should only be given numpy arrays or data frames")
 
         result_queue.put(result)
 
@@ -148,6 +169,14 @@ class _PatientDatabaseWrapper:
 
     def filter(self, patient_ids: Sequence[int]):
         return cast(PatientDatabase, _PatientDatabaseWrapper(self._db, np.sort(patient_ids)))
+
+    def map_with_data(
+        self,
+        map_func: Callable[[Iterator[Any]], A],
+        data: pd.DataFrame,
+        assume_sorted: bool = False,
+    ) -> Iterator[A]:
+        return self._db.map_with_data(map_func, data, assume_sorted)
 
     def map(self, map_func: Callable[[Iterator[Any]], A]) -> Iterator[A]:
         return self._db._map_fast(map_func, self._selected_patients)
@@ -209,6 +238,31 @@ class PatientDatabase:
     ) -> Iterator[A]:
         """Apply the provided map function to the database"""
         return self._map_fast(map_func, self._all_patient_ids)
+
+    def map_with_data(
+        self,
+        map_func: Callable[[Iterator[Any]], A],
+        data: pd.DataFrame,
+        assume_sorted: bool = False,
+    ) -> Iterator[A]:
+        """Apply the provided map function to the database"""
+
+        assert "patient_id" in data.columns
+
+        if not assume_sorted:
+            data = data.sort_values(by=["patient_id", "prediction_time"])
+
+        if self._num_threads != 1:
+            patients_per_part = np.array_split(data, self._num_threads)
+
+            map_func_p = pickle.dumps(map_func)
+
+            for part in patients_per_part:
+                self._input_queue.put((map_func_p, part))
+
+            return (self._result_queue.get() for _ in patients_per_part)
+        else:
+            return iter((map_func(_row_generator(self._database, data)),))
 
     def _map_fast(self, map_func: Callable[[Iterator[Any]], A], patient_ids: np.ndarray) -> Iterator[A]:
         """Apply the provided map function to the database"""

@@ -8,6 +8,7 @@
 #include <fstream>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
 #include "binary_version.hh"
@@ -20,19 +21,55 @@
 
 namespace {
 
+struct Patient;
+struct PatientDatabase;
+
+
+struct PatientDatabaseIterator : public PyObject {
+    static PyTypeObject Type;
+
+    PatientDatabaseIterator();
+
+    void init(PatientDatabase* database);
+
+    // Python methods
+    //-----------------------------------------
+    void dealloc();
+    PyObject* next();
+    //-----------------------------------------
+
+    bool in_use;
+    PatientDatabase* patient_database;
+    int32_t index;
+};
+
+PyTypeObject PatientDatabaseIterator::Type = {
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "meds_reader.PatientDatabaseIterator",
+    .tp_basicsize = sizeof(PatientDatabaseIterator),
+    .tp_itemsize = 0,
+    .tp_dealloc = convert_to_cfunc<&PatientDatabaseIterator::dealloc>(),
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = PyDoc_STR("PatientDatabaseIterator"),
+    .tp_iternext = convert_to_cfunc<&PatientDatabaseIterator::next>(),
+    .tp_init = nullptr,
+    .tp_new = nullptr,
+};
+
 struct PatientDatabase : public PyObject,
                          fast_shared_ptr_object<PatientDatabase> {
     static PyTypeObject Type;
 
     PatientDatabase(std::string_view dir);
+    ~PatientDatabase();
 
     size_t get_num_properties();
     PyObject* get_property_name(size_t property_index);
     ssize_t get_property_index(PyObject* property_name);
-    std::vector<PyObjectWrapper> get_property_data(size_t index,
+    void get_property_data(size_t index,
                                                    int32_t patient_offset,
-                                                   int32_t length);
-    std::vector<uint64_t> get_null_map(int32_t patient_offset, int32_t length);
+                                                   int32_t length, PyObject** result);
+    void get_null_map(int32_t patient_offset, int32_t length, uint64_t* result);
     int64_t get_patient_id(int32_t patient_offset) const;
     uint32_t get_patient_length(int32_t patient_offset) const;
     std::optional<int32_t> get_patient_offset(int64_t patient_id);
@@ -68,6 +105,9 @@ struct PatientDatabase : public PyObject,
     std::optional<absl::flat_hash_map<int64_t, int32_t>> patient_offset_map;
 
     PyObjectWrapper py_properties;
+
+    absl::InlinedVector<Patient*, 4> patients;
+    absl::InlinedVector<PatientDatabaseIterator, 4> patient_database_iterators;
 };
 
 PyMappingMethods PatientDatabaseMappingMethods = {
@@ -99,26 +139,149 @@ PyTypeObject PatientDatabase::Type = {
     .tp_free = nullptr,
 };
 
+struct PatientEvents;
 struct Event;
 struct EventPropertyIterator;
+
+struct PatientEventsIterator : public PyObject {
+    static PyTypeObject Type;
+
+    PatientEventsIterator();
+
+    void init(PatientEvents* events);
+
+    // Python methods
+    //-----------------------------------------
+    void dealloc();
+    __attribute__((always_inline)) PyObject* next();
+    PyObject* iter();
+    //-----------------------------------------
+
+    Event* raw_events;
+    PatientEvents* events;
+    int event_index;
+    int32_t patient_length;
+    bool in_use;
+};
+
+
+PyTypeObject PatientEventsIterator::Type = {
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "meds_reader.PatientEventsIterator",
+    .tp_basicsize = sizeof(PatientEventsIterator),
+    .tp_itemsize = 0,
+    .tp_dealloc = convert_to_cfunc<&PatientEventsIterator::dealloc>(),
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = PyDoc_STR("PatientEventsIterator"),
+    .tp_iter = convert_to_cfunc<&PatientEventsIterator::iter>(),
+    .tp_iternext = convert_to_cfunc<&PatientEventsIterator::next>(),
+    .tp_init = nullptr,
+    .tp_new = nullptr,
+};
+
+struct PatientEvents : public PyObject {
+    static PyTypeObject Type;
+
+    void init(Patient* patient, Event* events, int32_t patient_length);
+
+    // Python methods
+    //-----------------------------------------
+    PyObject* str();
+    void dealloc();
+    __attribute__((always_inline)) PyObject* subscript(PyObject*);
+    __attribute__((always_inline)) Py_ssize_t length();
+    __attribute__((always_inline)) PyObject* iter();
+    //-----------------------------------------
+
+    Patient* patient;
+    int patient_length;
+    Event* events;
+    PyObject* length_obj;
+    absl::InlinedVector<PatientEventsIterator, 4> iterators;
+};
+
+PyMappingMethods PatientEventsMappingMethods = {
+    .mp_length = convert_to_cfunc<&PatientEvents::length>(),
+    .mp_subscript = convert_to_cfunc<&PatientEvents::subscript>(),
+};
+
+PyTypeObject PatientEvents::Type = {
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name = "meds_reader.PatientEvents",
+    .tp_basicsize = sizeof(PatientEvents),
+    .tp_itemsize = 0,
+    .tp_dealloc = convert_to_cfunc<&PatientEvents::dealloc>(),
+    .tp_as_mapping = &PatientEventsMappingMethods,
+    .tp_str = convert_to_cfunc<&PatientEvents::str>(),
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = PyDoc_STR("PatientEvents"),
+    .tp_iter = convert_to_cfunc<&PatientEvents::iter>(),
+    .tp_init = nullptr,
+    .tp_alloc = nullptr,
+    .tp_new = nullptr,
+    .tp_free = nullptr,
+};
+
+
+struct EventPropertyIterator : public PyObject {
+    static PyTypeObject Type;
+
+    bool in_use;
+    Patient* patient;
+    Event* event;
+    uint64_t current_index;
+
+    EventPropertyIterator();
+    void init(Patient* patient, Event* e);
+
+    // Python methods
+    //-----------------------------------------
+    void dealloc();
+    __attribute__((always_inline)) PyObject* next();
+    PyObject* iter();
+    //-----------------------------------------
+};
+
+PyTypeObject EventPropertyIterator::Type = {
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "meds_reader.EventPropertyIterator",
+    .tp_basicsize = sizeof(EventPropertyIterator),
+    .tp_itemsize = 0,
+    .tp_dealloc = convert_to_cfunc<&EventPropertyIterator::dealloc>(),
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = PyDoc_STR("EventPropertyIterator"),
+    .tp_iter = convert_to_cfunc<&EventPropertyIterator::iter>(),
+    .tp_iternext = convert_to_cfunc<&EventPropertyIterator::next>(),
+    .tp_init = nullptr,
+    .tp_alloc = nullptr,
+    .tp_new = nullptr,
+    .tp_free = nullptr,
+};
 
 struct Patient : public PyObject, fast_shared_ptr_object<Patient> {
     static PyTypeObject Type;
 
-    static PyObject* create(const fast_shared_ptr<PatientDatabase>& pd,
-                            int32_t po, PyObject* patient_id);
+    static Patient* create(PatientDatabase* pd, size_t capacity);
 
-    const fast_shared_ptr<PatientDatabase> patient_database;
+    void init(int32_t patient_offset, int32_t patient_length, PyObject* patient_id);
 
-    const int32_t patient_offset;
-    const int32_t patient_length;
-    void* allocation;
-    std::vector<PyObjectWrapper>* saved_properties;
+    PatientDatabase* patient_database;
+    const size_t capacity;
+
+    int32_t patient_offset;
+    int32_t patient_length;
+    PyObject* patient_id;
+
+    bool in_use;
+
     Event* events;
-    std::vector<uint64_t> null_map;
+    uint64_t* null_map;
+    bool null_map_initialized;
+    PyObject** saved_properties;
+    std::bitset<64> properties_initialized;
 
-    PyObjectWrapper patient_id;
-    PyObjectWrapper events_obj;
+    PatientEvents events_obj;
+
+    absl::InlinedVector<EventPropertyIterator, 4> event_property_iterators;
 
     // Python methods
     //-----------------------------------------
@@ -128,6 +291,7 @@ struct Patient : public PyObject, fast_shared_ptr_object<Patient> {
     __attribute__((always_inline)) PyObject* get_events(void*);
     //-----------------------------------------
 
+    void delete_self();
     void operator delete(void* ptr) { free(ptr); }
     ~Patient();
 
@@ -135,12 +299,12 @@ struct Patient : public PyObject, fast_shared_ptr_object<Patient> {
     friend Event;
     friend EventPropertyIterator;
 
-    Patient(const fast_shared_ptr<PatientDatabase>& pd, int32_t po,
-            PyObject* patient_id);
+    Patient(PatientDatabase* pd, size_t capacity, char* data);
 
     PyObject* get_property(PyObject* property_name, Event* event_ptr);
     PyObject* get_property(size_t property_index, Event* event_ptr);
     uint64_t get_null_map(Event* event_ptr);
+    PyObject* create_event_property_iterator(Event* event_ptr);
 };
 
 PyGetSetDef PatientGetSet[] = {
@@ -167,9 +331,9 @@ PyTypeObject Patient::Type = {
 struct Event : public PyObject {
     static PyTypeObject Type;
 
-    fast_shared_ptr<Patient> patient;
+    Patient* patient;
 
-    Event(const fast_shared_ptr<Patient>& pd);
+    void init(Patient* patient);
 
     // Python methods
     //-----------------------------------------
@@ -196,152 +360,223 @@ PyTypeObject Event::Type = {
     .tp_free = nullptr,
 };
 
-struct EventPropertyIterator : public PyObject {
-    static PyTypeObject Type;
 
-    fast_shared_ptr<Patient> patient;
-    Event* event;
-    uint64_t current_index;
-
-    EventPropertyIterator(const fast_shared_ptr<Patient>& pd, Event* e);
-
-    // Python methods
-    //-----------------------------------------
-    void dealloc();
-    __attribute__((always_inline)) PyObject* next();
-    PyObject* iter();
-    //-----------------------------------------
-};
-
-PyTypeObject EventPropertyIterator::Type = {
-    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "meds_reader.EventPropertyIterator",
-    .tp_basicsize = sizeof(EventPropertyIterator),
-    .tp_itemsize = 0,
-    .tp_dealloc = convert_to_cfunc<&EventPropertyIterator::dealloc>(),
-    .tp_flags = Py_TPFLAGS_DEFAULT,
-    .tp_doc = PyDoc_STR("EventPropertyIterator"),
-    .tp_iter = convert_to_cfunc<&EventPropertyIterator::iter>(),
-    .tp_iternext = convert_to_cfunc<&EventPropertyIterator::next>(),
-    .tp_init = nullptr,
-    .tp_alloc = nullptr,
-    .tp_new = nullptr,
-    .tp_free = nullptr,
-};
-
-size_t get_num_needed_bytes(int32_t num_properties, int32_t patient_length) {
-    constexpr size_t property_alignment = alignof(std::vector<PyObjectWrapper>);
-    constexpr size_t event_alignment = alignof(Event);
-
-    size_t i = 0;
-
-    i += sizeof(Patient);
-
-    // Now align
-    size_t extra_bytes = i % property_alignment;
-    if (extra_bytes > 0) {
-        i += ((ssize_t)property_alignment - (ssize_t)extra_bytes);
-    }
-
-    i += num_properties * sizeof(std::vector<PyObjectWrapper>);
-
-    // Now align
-    extra_bytes = i % event_alignment;
-    if (extra_bytes > 0) {
-        i += ((ssize_t)event_alignment - (ssize_t)extra_bytes);
-    }
-
-    i += sizeof(Event) * patient_length;
-
-    return i;
+PatientEventsIterator::PatientEventsIterator() {
+    in_use = false;
 }
 
-size_t get_property_offset() {
-    constexpr size_t property_alignment = alignof(std::vector<PyObjectWrapper>);
-
-    size_t i = 0;
-
-    i += sizeof(Patient);
-
-    // Now align
-    size_t extra_bytes = i % property_alignment;
-    if (extra_bytes > 0) {
-        i += ((ssize_t)property_alignment - (ssize_t)extra_bytes);
-    }
-
-    return i;
-}
-
-size_t get_event_offset(int32_t num_properties) {
-    constexpr size_t property_alignment = alignof(std::vector<PyObjectWrapper>);
-    constexpr size_t event_alignment = alignof(Event);
-
-    size_t i = 0;
-
-    i += sizeof(Patient);
-
-    // Now align
-    size_t extra_bytes = i % property_alignment;
-    if (extra_bytes > 0) {
-        i += ((ssize_t)property_alignment - (ssize_t)extra_bytes);
-    }
-
-    i += num_properties * sizeof(std::vector<PyObjectWrapper>);
-
-    // Now align
-    extra_bytes = i % event_alignment;
-    if (extra_bytes > 0) {
-        i += ((ssize_t)event_alignment - (ssize_t)extra_bytes);
-    }
-
-    return i;
-}
-
-Patient::Patient(const fast_shared_ptr<PatientDatabase>& pd, int32_t po,
-                 PyObject* pid)
-    : patient_database(pd),
-      patient_offset(po),
-      patient_length(pd->get_patient_length(po)),
-      patient_id(pid) {
+void PatientEventsIterator::init(PatientEvents* e) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
-    Py_INCREF(patient_id.borrow());
-    char* allocation = reinterpret_cast<char*>(this);
-    saved_properties = reinterpret_cast<std::vector<PyObjectWrapper>*>(
-        allocation + get_property_offset());
-    events = reinterpret_cast<Event*>(
-        allocation + get_event_offset(pd->get_num_properties()));
 
-    for (size_t i = 0; i < pd->get_num_properties(); i++) {
-        new (saved_properties + i) std::vector<PyObjectWrapper>();
-    }
+    events = e;
+    Py_INCREF(events);
+    raw_events = e->events;
+    patient_length = e->patient_length;
 
-    events_obj = PyTuple_New(patient_length);
+    event_index = 0;
+}
 
-    for (int32_t i = 0; i < patient_length; i++) {
-        Event* e = new (events + i) Event(shared_from_this());
-        PyTuple_SET_ITEM(events_obj.borrow(), i, static_cast<PyObject*>(e));
+void PatientEventsIterator::dealloc() {
+    in_use = false;
+    Py_DECREF(events);
+}
+
+inline PyObject* PatientEventsIterator::next() {
+    if (event_index == patient_length) {
+        return PyErr_Format(PyExc_StopIteration,
+                            "Exceeded the number of properties in events");
+    } else {
+        PyObject* event = raw_events + event_index;
+        event_index++;
+        Py_INCREF(event);
+        return event;
     }
 }
 
-Patient::~Patient() {
-    if (events_obj.ref != nullptr) {
-        std::cerr << "Patient dies before the events object dies?" << std::endl;
-        std::terminate();
-    }
+PyObject* PatientEventsIterator::iter() {
+    Py_INCREF(this);
+    return this;
+}
 
-    for (size_t i = 0; i < patient_database->get_num_properties(); i++) {
-        saved_properties[i].~vector<PyObjectWrapper>();
-    }
+void PatientEvents::init(Patient* p, Event* e, int pl) {
+    PyObject_Init(static_cast<PyObject*>(this), &Type);
 
-    for (int32_t i = 0; i < patient_length; i++) {
-        if (events[i].patient.get() != nullptr) {
-            std::cerr << "Patient dies before a child event object dies?"
-                      << std::endl;
-            std::terminate();
+    patient = p;
+
+    patient->incref();
+
+    events = e;
+    patient_length = pl;
+    length_obj = nullptr;
+
+    for (int i =0 ; i < patient_length;i++) {
+        events[i].init(patient);
+    }
+}
+
+inline PyObject* PatientEvents::iter() {
+    size_t desired_index = iterators.size();
+
+    for (size_t i = 0; i < iterators.size(); i++) {
+        if (!iterators[i].in_use) {
+            desired_index = i;
+            break;
         }
-        events[i].~Event();
+    }
+
+    if (desired_index == iterators.size()) {
+        iterators.emplace_back();
+    }
+
+    iterators[desired_index].init(this);
+
+    return iterators.data() + desired_index;
+}
+
+inline Py_ssize_t PatientEvents::length() { return patient_length; }
+
+
+inline PyObject* PatientEvents::subscript(PyObject* event_index) {
+    if ( PyLong_Check(event_index)) {
+        Py_ssize_t event_index_integer = PyLong_AsSsize_t(event_index);
+
+        if (PyErr_Occurred()) {
+            return nullptr;
+        }
+
+        if (event_index_integer < 0) {
+            event_index_integer += patient_length;
+        }
+
+        if (event_index_integer < 0 || event_index_integer >= patient_length) {
+            return PyErr_Format(PyExc_IndexError,
+                                "Provided an out of bound index to PatientEvents.__getitem__");
+        }
+
+        PyObject* obj = static_cast<PyObject*>(events + event_index_integer);
+
+        Py_INCREF(obj);
+
+        return obj;
+
+    } else if (PySlice_Check(event_index)) {
+        Py_ssize_t start, stop, step, slicelength;
+
+        int err = PySlice_GetIndicesEx(event_index, patient_length, &start, &stop, &step, &slicelength);
+
+        if (err == -1) {
+            return nullptr;
+        }
+
+        PyObject* result = PyTuple_New(slicelength);
+
+        for (Py_ssize_t i = 0; i < slicelength; i++) {
+            PyObject* obj = static_cast<PyObject*>(events + start + i * step);
+
+            Py_INCREF(obj);
+            PyTuple_SET_ITEM(result, i, obj);
+        }
+
+        return result;
+    } else {
+        return PyErr_Format(PyExc_IndexError,
+                            "Provided a unknown index to PatientEvents.__getitem__");
     }
 }
+
+void PatientEvents::dealloc() {
+    for (int i =0 ; i < patient_length;i++) {
+        Py_DECREF(static_cast<PyObject*>(events + i));
+    }
+    Py_XDECREF(length_obj);
+
+    patient->decref();
+}
+
+
+PyObject* PatientEvents::str() {
+    static_assert(sizeof(int64_t) == sizeof(long));
+    int64_t patient_id_val = PyLong_AsLong(patient->patient_id);
+
+    std::string debug_string =
+        absl::StrCat("Events(patient_id=", patient_id_val,
+                     ", len(events)=", patient_length, ")");
+
+    PyObject* py_string =
+        PyUnicode_FromStringAndSize(debug_string.data(), debug_string.size());
+
+    if (py_string == nullptr) {
+        return PyErr_Format(
+            PyExc_RuntimeError,
+            "Could not convert the database path to a string ...");
+    }
+
+    return py_string;
+}
+
+std::tuple<size_t, size_t, size_t, size_t> align_and_size_patient(int32_t num_properties, int32_t capacity) {
+    constexpr size_t event_alignment = alignof(Event);
+    constexpr size_t null_map_alignment = alignof(uint64_t);
+    constexpr size_t property_alignment = alignof(PyObject*);
+
+    size_t i = 0;
+
+    i += sizeof(Patient);
+
+    // Now align
+    size_t extra_bytes = i % event_alignment;
+    if (extra_bytes > 0) {
+        i += ((ssize_t)event_alignment - (ssize_t)extra_bytes);
+    }
+
+    size_t event_offset = i;
+
+    i += sizeof(Event) * capacity;
+
+    // Now align
+    extra_bytes = i % null_map_alignment;
+    if (extra_bytes > 0) {
+        i += ((ssize_t)null_map_alignment - (ssize_t)extra_bytes);
+    }
+
+    size_t null_map_offset = i;
+
+    i += capacity * sizeof(uint64_t);
+
+
+    // Now align
+    extra_bytes = i % property_alignment;
+    if (extra_bytes > 0) {
+        i += ((ssize_t)property_alignment - (ssize_t)extra_bytes);
+    }
+
+    size_t property_offset = i;
+
+    i += num_properties * capacity * sizeof(PyObject*);
+
+
+    size_t total_size = i;
+
+
+    return {event_offset, null_map_offset, property_offset, total_size};
+}
+
+Patient::Patient(PatientDatabase* pd, size_t c, char* data)
+    : patient_database(pd), capacity(c), in_use(false) {
+
+    auto info = align_and_size_patient(pd->get_num_properties(), capacity);
+
+    static_assert(std::is_trivial<Event>::value);
+    events = reinterpret_cast<Event*>(data + std::get<0>(info));
+
+    static_assert(std::is_trivial<uint64_t>::value);
+    null_map = reinterpret_cast<uint64_t*>(data + std::get<1>(info));
+
+    static_assert(std::is_trivial<PyObject*>::value);
+    saved_properties = reinterpret_cast<PyObject**>(data + std::get<2>(info));
+}
+
+Patient::~Patient() {}
 
 PyObject* Patient::get_property(PyObject* property_name, Event* event_ptr) {
     // Needs to get the property
@@ -360,71 +595,121 @@ PyObject* Patient::get_property(PyObject* property_name, Event* event_ptr) {
 PyObject* Patient::get_property(size_t index, Event* event_ptr) {
     size_t event_index = event_ptr - events;
 
-    auto& val = saved_properties[index];
-
-    if (val.size() == 0) {
-        // Force init it
-        val = patient_database->get_property_data(index, patient_offset,
-                                                  patient_length);
+    if (properties_initialized.test(index) == 0) {
+        patient_database->get_property_data(index, patient_offset, patient_length, saved_properties + capacity * index);
+        properties_initialized.set(index);
     }
 
-    if (val[event_index].borrow() == nullptr) {
+    PyObject* res = saved_properties[capacity * index + event_index];
+
+    if (res == nullptr) {
         Py_RETURN_NONE;
+    } else {
+        Py_INCREF(res);
+        return res;
     }
-
-    return val[event_index].copy();
 };
 
 uint64_t Patient::get_null_map(Event* event_ptr) {
     size_t event_index = event_ptr - events;
 
-    if (null_map.size() == 0) {
-        null_map =
-            patient_database->get_null_map(patient_offset, patient_length);
+    if (!null_map_initialized) {
+        patient_database->get_null_map(patient_offset, patient_length, null_map);
+        null_map_initialized = true;
     }
 
     return null_map[event_index];
 }
 
-PyObject* Patient::create(const fast_shared_ptr<PatientDatabase>& pd,
-                          int32_t patient_offset, PyObject* patient_id) {
-    int32_t length = pd->get_patient_length(patient_offset);
+Patient* Patient::create(PatientDatabase* pd, size_t capacity) {
 
-    constexpr size_t property_alignment = alignof(std::vector<PyObjectWrapper>);
+    constexpr size_t property_alignment = alignof(PyObject*);
     constexpr size_t event_alignment = alignof(Event);
     constexpr size_t patient_alignment = alignof(Patient);
+    constexpr size_t null_map_alignment = alignof(uint64_t);
 
-    size_t common_alignment = std::lcm(
-        property_alignment, std::lcm(event_alignment, patient_alignment));
+    size_t common_alignment = std::lcm(null_map_alignment, std::lcm(
+        property_alignment, std::lcm(event_alignment, patient_alignment)));
 
     if (common_alignment > alignof(max_align_t)) {
         throw std::runtime_error("This should never happen");
     }
 
+    auto info = align_and_size_patient(pd->get_num_properties(), capacity);
+
     void* data =
-        calloc(1, get_num_needed_bytes(pd->get_num_properties(), length));
-    Patient* casted_data = new (data) Patient(pd, patient_offset, patient_id);
-    return static_cast<PyObject*>(casted_data);
+        calloc(1, std::get<3>(info));
+    Patient* casted_data = new (data) Patient(pd, capacity, (char*)data);
+    return casted_data;
 }
 
-inline PyObject* Patient::get_patient_id(void*) { return patient_id.copy(); }
 
-inline PyObject* Patient::get_events(void*) { return events_obj.copy(); }
+void Patient::init(int32_t po, int32_t pl, PyObject* pid_object) {
+    PyObject_Init(static_cast<PyObject*>(this), &Type);
+
+    counter = 1;
+
+    patient_database->incref();
+
+    patient_offset = po;
+    patient_length = pl;
+    patient_id = pid_object;
+    Py_INCREF(patient_id);
+
+    in_use = true;
+    properties_initialized.reset();
+    null_map_initialized = false;
+
+    events_obj.init(this, events, patient_length);
+}
+
+inline PyObject* Patient::get_patient_id(void*) {
+    Py_INCREF(patient_id);
+    return patient_id;
+}
+
+inline PyObject* Patient::get_events(void*) {
+    PyObject* result = static_cast<PyObject*>(&events_obj);
+    Py_INCREF(result);
+    return result;
+}
 
 void Patient::dealloc() {
-    patient_id = std::move(PyObjectWrapper());
-    events_obj = PyObjectWrapper();
+    if (!in_use) {
+        throw std::runtime_error("How can a patient not in use get deallocated?");
+    }
+    Py_DECREF(patient_id);
+    Py_DECREF(static_cast<PyObject*>(&events_obj));
+
+    for (size_t p_index = 0; p_index < patient_database->get_num_properties(); p_index++) {
+        if (!properties_initialized.test(p_index)) {
+            continue;
+        }
+
+        for (int32_t i = 0; i < patient_length; i++) {
+            PyObject*& obj = saved_properties[p_index * capacity + i];
+            if (obj != nullptr) {
+                Py_DECREF(obj);
+                obj = nullptr;
+            }
+        }
+    }
+
     decref();
+}
+
+void Patient::delete_self() {
+    in_use = false;
+    patient_database->decref();
 }
 
 PyObject* Patient::str() {
     static_assert(sizeof(int64_t) == sizeof(long));
-    int64_t patient_id_val = PyLong_AsLong(patient_id.borrow());
-    size_t num_events = PyTuple_GET_SIZE(events_obj.borrow());
+    int64_t patient_id_val = PyLong_AsLong(patient_id);
 
     std::string debug_string =
         absl::StrCat("Patient(patient_id=", patient_id_val,
-                     ", len(events)=", num_events, ")");
+                     ", len(events)=", patient_length, ")");
 
     PyObject* py_string =
         PyUnicode_FromStringAndSize(debug_string.data(), debug_string.size());
@@ -438,11 +723,33 @@ PyObject* Patient::str() {
     return py_string;
 }
 
-Event::Event(const fast_shared_ptr<Patient>& pd) : patient(pd) {
-    PyObject_Init(static_cast<PyObject*>(this), &Type);
+PyObject* Patient::create_event_property_iterator(Event* event) {
+    size_t desired_index = event_property_iterators.size();
+
+    for (size_t i = 0; i < event_property_iterators.size(); i++) {
+        if (!event_property_iterators[i].in_use) {
+            desired_index = i;
+        }
+    }
+
+    if (desired_index == event_property_iterators.size()) {
+        event_property_iterators.emplace_back();
+    }
+
+    event_property_iterators[desired_index].init(this, event);
+
+    return static_cast<PyObject*>(event_property_iterators.data() + desired_index);
 }
 
-void Event::dealloc() { patient.reset(); }
+void Event::init(Patient* p) {
+    PyObject_Init(static_cast<PyObject*>(this), &Type);
+    patient = p;
+    patient->incref();
+}
+
+void Event::dealloc() {
+    patient->decref();
+}
 
 inline PyObject* Event::getattro(PyObject* key) {
     Py_INCREF(key);
@@ -452,7 +759,7 @@ inline PyObject* Event::getattro(PyObject* key) {
     return patient->get_property(key_wrapper.borrow(), this);
 }
 
-PyObject* Event::iter() { return new EventPropertyIterator(patient, this); }
+PyObject* Event::iter() { return patient->create_event_property_iterator(this); }
 
 PyObject* Event::str() {
     PyObjectWrapper time_str{PyUnicode_FromString("time")};
@@ -479,14 +786,24 @@ PyObject* Event::str() {
     return py_string;
 }
 
-EventPropertyIterator::EventPropertyIterator(const fast_shared_ptr<Patient>& pd,
-                                             Event* e)
-    : patient(pd), event(e) {
+EventPropertyIterator::EventPropertyIterator() {
+    in_use = false;
+}
+
+
+void EventPropertyIterator::init(Patient* pd, Event* e) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
+    patient = pd;
+    event = e;
+
+    in_use = true;
+
+    patient->incref();
+
     current_index = patient->get_null_map(e);
 }
 
-void EventPropertyIterator::dealloc() { delete this; }
+void EventPropertyIterator::dealloc() { in_use = false; patient->decref(); }
 
 inline PyObject* EventPropertyIterator::next() {
     if (current_index == 0) {
@@ -504,7 +821,9 @@ inline PyObject* EventPropertyIterator::next() {
 
         PyObject* property = patient->get_property(num_zeros, event);
 
-        PyObject* result = PyTuple_Pack(2, property_name, property);
+        PyObject* result = PyTuple_New(2);
+        PyTuple_SET_ITEM(result, 0, property_name);
+        PyTuple_SET_ITEM(result, 1, property);
 
         return result;
     }
@@ -592,6 +911,16 @@ PatientDatabase::PatientDatabase(std::string_view dir)
     num_patients = patient_id_file.data<int64_t>().size();
 }
 
+PatientDatabase::~PatientDatabase() {
+    for (Patient* patient : patients) {
+        if (patient->in_use) {
+            std::cerr << "Cannot delete database while still in use" << std::endl;
+            abort();
+        }
+        delete patient;
+    }
+}
+
 size_t PatientDatabase::get_num_properties() { return properties.size(); }
 
 PyObject* PatientDatabase::get_property_name(size_t property_name_index) {
@@ -603,22 +932,22 @@ ssize_t PatientDatabase::get_property_index(PyObject* property_name) {
     return property_map->get_index(property_name);
 }
 
-std::vector<PyObjectWrapper> PatientDatabase::get_property_data(
-    size_t index, int32_t patient_offset, int32_t length) {
+void PatientDatabase::get_property_data(
+    size_t index, int32_t patient_offset, int32_t length, PyObject** result) {
     if (property_accessors[index] == nullptr) {
         property_accessors[index] = create_property_reader(
             root_directory, properties[index].first, properties[index].second);
     }
-    return property_accessors[index]->get_property_data(patient_offset, length);
+    property_accessors[index]->get_property_data(patient_offset, length, result);
 }
 
-std::vector<uint64_t> PatientDatabase::get_null_map(int32_t patient_offset,
-                                                    int32_t length) {
+void PatientDatabase::get_null_map(int32_t patient_offset,
+                                                    int32_t length, uint64_t* result) {
     if (!null_map_reader) {
         null_map_reader =
             create_null_map_reader(root_directory, properties.size());
     }
-    return null_map_reader->get_null_map(patient_offset, length);
+    null_map_reader->get_null_map(patient_offset, length, result);
 }
 
 int64_t PatientDatabase::get_patient_id(int32_t patient_offset) const {
@@ -706,7 +1035,29 @@ inline PyObject* PatientDatabase::subscript(PyObject* patient_id) {
                             int_patient_id);
     }
 
-    return Patient::create(shared_from_this(), *patient_offset, patient_id);
+    uint32_t patient_length = get_patient_length(*patient_offset);
+
+    size_t index_to_use = patients.size();
+
+    for (size_t i = 0; i < patients.size(); i++) {
+        if (!patients[i]->in_use) {
+            index_to_use = i;
+            break;
+        }
+    }
+
+    if (index_to_use == patients.size()) {
+        patients.push_back(Patient::create(this, next_pow2(patient_length)));
+    }
+
+    if (patients[index_to_use]->capacity < patient_length) {
+        delete patients[index_to_use];
+        patients[index_to_use] = Patient::create(this, next_pow2(patient_length));
+    }
+
+    patients[index_to_use]->init(*patient_offset, patient_length, patient_id);
+
+    return patients[index_to_use];
 }
 
 PyObject* PatientDatabase::str() {
@@ -726,65 +1077,55 @@ PyObject* PatientDatabase::str() {
     return py_string;
 }
 
-struct PatientDatabaseIterator {
-    PyObject_HEAD
-        /* Type-specific fields go here. */
-
-        PyObject* patient_database;
-    int32_t index;
-};
-
-void patient_database_iterator_dealloc(PyObject* self) {
-    PatientDatabaseIterator* actual_self = (PatientDatabaseIterator*)self;
-    Py_DECREF(actual_self->patient_database);
-    Py_TYPE(self)->tp_free(self);
+PatientDatabaseIterator::PatientDatabaseIterator() {
+    in_use = false;
 }
 
-PyObject* patient_database_iterator_next(PyObject* self) {
-    PatientDatabaseIterator* actual_self = (PatientDatabaseIterator*)self;
-    PatientDatabase* patient_database =
-        static_cast<PatientDatabase*>(actual_self->patient_database);
+void PatientDatabaseIterator::init(PatientDatabase* database) {
+        PyObject_Init(static_cast<PyObject*>(this), &Type);
 
-    if (actual_self->index >= patient_database->num_patients) {
-        return PyErr_Format(PyExc_StopIteration,
-                            "Exceeded the size of the PatientDatabase");
+        patient_database = database;
+        patient_database->incref();
+        index = 0;
+        in_use = true;
+}
+
+    void PatientDatabaseIterator::dealloc() {
+        in_use = false;
+        patient_database->decref();
     }
 
-    static_assert(sizeof(int64_t) == sizeof(long long));
-    // std::cout<<"Before thing " << patient_database << std::endl;
+PyObject* PatientDatabaseIterator::next() {
+     if (index >= patient_database->num_patients) {
+            return PyErr_Format(PyExc_StopIteration,
+                            "Exceeded the size of the PatientDatabase");
+        }
 
-    int64_t patient_id = patient_database->get_patient_id(actual_self->index++);
-    // std::cout<<"About to do the thing" << std::endl;
-    PyObject* result = PyLong_FromLongLong(patient_id);
+        static_assert(sizeof(int64_t) == sizeof(long long));
 
-    // std::cout<<"Did the thing " << std::endl;
-    return result;
+        int64_t patient_id = patient_database->get_patient_id(index++);
+
+        PyObject* result = PyLong_FromLongLong(patient_id);
+
+        return result;
 }
 
-PyTypeObject PatientDatabaseIteratorType = {
-    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "meds_reader.PatientDatabaseIterator",
-    .tp_basicsize = sizeof(PatientDatabaseIterator),
-    .tp_itemsize = 0,
-    .tp_dealloc = patient_database_iterator_dealloc,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
-    .tp_doc = PyDoc_STR("PatientDatabaseIterator"),
-    .tp_iternext = patient_database_iterator_next,
-    .tp_init = nullptr,
-    .tp_new = nullptr,
-};
-
 PyObject* PatientDatabase::iter() {
-    PyObject* iter =
-        PatientDatabaseIteratorType.tp_alloc(&PatientDatabaseIteratorType, 0);
-    PatientDatabaseIterator* actual_iter = (PatientDatabaseIterator*)iter;
+    size_t desired_index = patient_database_iterators.size();
 
-    Py_INCREF(this);
-    actual_iter->patient_database = static_cast<PyObject*>(this);
+    for (size_t i = 0; i < patient_database_iterators.size(); i++) {
+        if (!patient_database_iterators[i].in_use) {
+            desired_index = i;
+        }
+    }
 
-    actual_iter->index = 0;
+    if (desired_index == patient_database_iterators.size()) {
+        patient_database_iterators.emplace_back();
+    }
 
-    return iter;
+    patient_database_iterators[desired_index].init(this);
+
+    return patient_database_iterators.data() + desired_index;
 }
 
 struct PyModuleDef meds_reader_module = {
@@ -817,12 +1158,22 @@ PyMODINIT_FUNC PyInit__meds_reader(void) {
         return NULL;
     }
 
-    if (PyModule_AddType(m, &PatientDatabaseIteratorType) < 0) {
+    if (PyModule_AddType(m, &PatientDatabaseIterator::Type) < 0) {
         Py_DECREF(m);
         return NULL;
     }
 
     if (PyModule_AddType(m, &Patient::Type) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    if (PyModule_AddType(m, &PatientEvents::Type) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    if (PyModule_AddType(m, &PatientEventsIterator::Type) < 0) {
         Py_DECREF(m);
         return NULL;
     }

@@ -353,7 +353,7 @@ void sort_concatenate_shards(int i, const std::filesystem::path& root_path,
                 pointer += size;
             }
 
-            pdqsort_branchless(std::begin(entries), std::end(entries));
+            pdqsort(std::begin(entries), std::end(entries));
 
             data_file.run_with_file(shard, [&](std::ofstream& file) {
                 if (entries.size() > 0) {

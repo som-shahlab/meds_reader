@@ -172,8 +172,8 @@ struct StringPropertyReader : PropertyReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
-    std::vector<PyObjectWrapper> get_property_data(int32_t patient_offset,
-                                                   int32_t length) {
+    void get_property_data(int32_t patient_offset,
+                                                   int32_t length, PyObject** result) {
         uint64_t offset = data_file.data<uint64_t>()[patient_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[patient_offset + 1] - offset;
@@ -249,8 +249,6 @@ struct StringPropertyReader : PropertyReader {
                 " " + std::to_string(decompressed_size));
         }
 
-        std::vector<PyObjectWrapper> result(length);
-
         size_t result_index = 0;
 
         for (uint64_t null_byte : null_bytes) {
@@ -280,8 +278,6 @@ struct StringPropertyReader : PropertyReader {
                                      std::to_string(value_size) + " " +
                                      std::to_string(num_per_patient_values));
         }
-
-        return result;
     }
 };
 
@@ -308,8 +304,8 @@ struct TimePropertyReader : PropertyReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
-    std::vector<PyObjectWrapper> get_property_data(int32_t patient_offset,
-                                                   int32_t length) {
+    void get_property_data(int32_t patient_offset,
+                                                   int32_t length, PyObject** result) {
         uint64_t offset = data_file.data<uint64_t>()[patient_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[patient_offset + 1] - offset;
@@ -355,9 +351,6 @@ struct TimePropertyReader : PropertyReader {
                                      std::to_string(num_bytes));
         }
 
-        std::vector<PyObjectWrapper> result;
-        result.resize(length);
-
         int64_t seconds_per_day = (int64_t)(24 * 60 * 60);
         int64_t microseconds_per_second = (int64_t)(1000 * 1000);
 
@@ -374,6 +367,9 @@ struct TimePropertyReader : PropertyReader {
 
         int64_t microseconds = start_micros;
 
+        uint32_t num_null = values[0];
+        size_t result_index = num_null;
+
         auto add_times = [&](uint32_t copies) {
             PyObjectWrapper dt{PyDateTime_FromDateAndTime(
                 day.year(), day.month(), day.day(), day.hour(), day.minute(),
@@ -383,16 +379,13 @@ struct TimePropertyReader : PropertyReader {
                 throw std::runtime_error("Should never happen");
             }
             for (uint32_t i = 1; i < copies; i++) {
-                result.emplace_back(dt.copy());
+                result[result_index++] = dt.copy();
             }
-            result.emplace_back(std::move(dt));
+            result[result_index++] = dt.steal();
         };
 
-        uint32_t num_null = values[0];
-        result.resize(num_null);
-
         size_t value_index = 1;
-        while (result.size() < (size_t)length) {
+        while (result_index < (size_t)length) {
             uint32_t days_val = values[value_index++];
             uint32_t days_delta = days_val >> 4;
             uint32_t days_count = days_val % (1 << 4);
@@ -435,8 +428,6 @@ struct TimePropertyReader : PropertyReader {
         if (value_index > values.size()) {
             throw std::runtime_error("Out of bounds error for values");
         }
-
-        return result;
     }
 };
 
@@ -467,8 +458,8 @@ struct PrimitivePropertyReader : PropertyReader {
 
     std::vector<char> decompressed;
 
-    std::vector<PyObjectWrapper> get_property_data(int32_t patient_offset,
-                                                   int32_t length) {
+    void get_property_data(int32_t patient_offset,
+                                                   int32_t length, PyObject** result) {
         uint64_t offset = data_file.data<uint64_t>()[patient_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[patient_offset + 1] - offset;
@@ -492,9 +483,6 @@ struct PrimitivePropertyReader : PropertyReader {
         if (ret != decompressed_size) {
             throw std::runtime_error("Decompressed the wrong amount of data");
         }
-
-        std::vector<PyObjectWrapper> result;
-        result.resize(length);
 
         auto num_null_bytes =
             (length + sizeof(uint64_t) * 8 - 1) / (sizeof(uint64_t) * 8);
@@ -529,8 +517,6 @@ struct PrimitivePropertyReader : PropertyReader {
         if (result_index % 32 > (size_t)length % 32) {
             throw std::runtime_error("Had more results than the length?");
         }
-
-        return result;
     }
 };
 
@@ -621,7 +607,7 @@ struct NullMapReaderImpl : NullMapReader {
 
     std::vector<char> decompressed;
 
-    std::vector<uint64_t> get_null_map(int32_t patient_offset, int32_t length) {
+    void get_null_map(int32_t patient_offset, int32_t length, uint64_t* result) {
         uint64_t offset = data_file.data<uint64_t>()[patient_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[patient_offset + 1] - offset;
@@ -647,15 +633,11 @@ struct NullMapReaderImpl : NullMapReader {
             throw std::runtime_error("Decompressed the wrong amount of data");
         }
 
-        std::vector<uint64_t> result(length);
-
         const T* data = (const T*)decompressed.data();
 
         for (int32_t i = 0; i < length; i++) {
             result[i] = data[i];
         }
-
-        return result;
     }
 };
 
