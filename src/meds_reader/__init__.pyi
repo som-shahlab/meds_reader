@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import datetime
-from typing import Any, Callable, Collection, Iterator, List, Mapping, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Iterator, List, Mapping, Sequence, Tuple, TypeVar
 
-import meds
+import pandas as pd
 import pyarrow as pa
 
 A = TypeVar("A")
@@ -43,6 +43,24 @@ class PatientDatabase:
         """Apply a function to every patient in the database, in a multi-threaded manner.
 
         map_func is a callable that takes an iterable of patients.
+        """
+        ...
+
+    def map_with_data(
+        self,
+        map_func: Callable[[Iterator[Tuple[Patient, Sequence[Any]]]], A],
+        data: pd.DataFrame,
+        assume_sorted: bool = False,
+    ) -> Iterator[A]:
+        """Apply a function with associated data to every patient in the database, in a multi-threaded manner.
+
+        map_func is a callable that takes an iterable of patients paired with rows from the provided table for that patient_id.
+
+        The provided table must have 'patient_id' as an integer index that will be used for mapping rows.
+
+        Note:
+            This code requires the input to be sorted by patient_id. It will automatically do that sorting
+            for you, but we also provide assume_sorted to allow people to skip that step for already sorted data.
         """
         ...
 

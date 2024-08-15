@@ -14,19 +14,31 @@ class fast_shared_ptr_object {
 
     fast_shared_ptr<T> shared_from_this();
 
-   protected:
-    friend class fast_shared_ptr<T>;
-
     void decref() {
         counter--;
+        if (counter < 0) {
+            throw std::runtime_error("Counter is less than zero");
+        }
 
         if (counter == 0) {
-            delete static_cast<T*>(this);
+            static_cast<T*>(this)->delete_self();
         }
     }
 
-   private:
+    void incref() {
+        counter++;
+    }
+
+   protected:
+    friend class fast_shared_ptr<T>;
+
+
+    void delete_self() {
+        delete static_cast<T*>(this);
+    }
+
     size_t counter;
+   private:
 };
 
 template <typename T>

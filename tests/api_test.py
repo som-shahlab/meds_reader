@@ -4,6 +4,7 @@ import os
 import subprocess
 
 import meds
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -111,6 +112,41 @@ def test_missing(patient_database):
 
 def test_iter(patient_database):
     assert list(patient_database) == [32, 64]
+
+
+def test_map(patient_database):
+    def h(patients):
+        result = []
+        for p in patients:
+            result.append(p.patient_id)
+        return result
+
+    results = list(patient_database.map(h))
+
+    final_result = {a for b in results for a in b}
+
+    print(final_result)
+
+    assert final_result == {32, 64}
+
+    table = pd.DataFrame({"patient_id": [64, 32], "other": [1, 1000]})
+
+    def h2(patients_and_data):
+        result = []
+        for patient, rows in patients_and_data:
+            assert len(rows) == 1
+            row = rows[0]
+            print(patient, row)
+            result.append((patient.patient_id, row.other))
+        return result
+
+    results = list(patient_database.map_with_data(h2, table))
+
+    final_result = {a for b in results for a in b}
+
+    print(final_result)
+
+    assert final_result == {(32, 1000), (64, 1)}
 
 
 def test_properties(patient_database):
