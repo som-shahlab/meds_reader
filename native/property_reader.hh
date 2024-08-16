@@ -13,7 +13,7 @@
 
 struct PropertyReader {
     virtual void get_property_data(
-        int32_t patient_offset, int32_t length, PyObject** result) = 0;
+        int32_t subject_offset, int32_t length, PyObject** result) = 0;
     virtual ~PropertyReader(){};
 };
 
@@ -22,7 +22,7 @@ std::unique_ptr<PropertyReader> create_property_reader(
     const std::string& property_name, DataType property_type);
 
 struct NullMapReader {
-    virtual void get_null_map(int32_t patient_offset,
+    virtual void get_null_map(int32_t subject_offset,
                                                int32_t length, uint64_t* result) = 0;
     virtual ~NullMapReader(){};
 };

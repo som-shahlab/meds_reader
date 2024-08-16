@@ -11,7 +11,7 @@ license = {text = "Apache-2.0"}
 requires-python=">=3.9"
 dependencies = [
   "pyarrow >= 9",
-  "meds>=0.3,<0.4",
+  "meds == 0.3.1",
   "numpy>=1.16,<2",
   "pandas>=2.2",
 ]

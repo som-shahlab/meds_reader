@@ -5,19 +5,19 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 import meds_reader
 
-class MutablePatient(meds_reader.Patient):
-    """A patient consists of a patient_id and a sequence of Events"""
+class MutableSubject(meds_reader.Subject):
+    """A subject consists of a subject_id and a sequence of Events"""
 
-    def __init__(self, patient_id, events: List[MutableEvent] = []): ...
+    def __init__(self, subject_id, events: List[MutableEvent] = []): ...
 
-    patient_id: int
-    "The unique identifier for this patient"
+    subject_id: int
+    "The unique identifier for this subject"
 
     events: List[MutableEvent]
-    "Items that have happened to a patient"
+    "Items that have happened to a subject"
 
 class MutableEvent(meds_reader.Event):
-    """An event represents a single unit of information about a patient. It contains a time and code, and potentially more properties."""
+    """An event represents a single unit of information about a subject. It contains a time and code, and potentially more properties."""
 
     def __init__(self, time: datetime.datetime, code: str, properties: Dict[str, Any] = {}): ...
 
@@ -41,7 +41,7 @@ class MutableEvent(meds_reader.Event):
 def transform_meds_dataset(
     source_dataset_path: str,
     target_dataset_path: str,
-    transform_func: Callable[[MutablePatient], Optional[MutablePatient]],
+    transform_func: Callable[[MutableSubject], Optional[MutableSubject]],
     num_threads: int = 1,
 ):
     """Transform a MEDS dataset using the provided transform function, potentially using multiple threads."""
