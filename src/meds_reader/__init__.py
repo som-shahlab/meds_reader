@@ -250,17 +250,33 @@ class PatientDatabase:
         assert "patient_id" in data.columns
 
         if not assume_sorted:
-            data = data.sort_values(by=["patient_id", "prediction_time"])
+            data = data.sort_values(by=["patient_id"])
 
         if self._num_threads != 1:
-            patients_per_part = np.array_split(data, self._num_threads)
+            num_rows = data.shape[0]
+            num_rows_per_shard = (num_rows + self._num_threads - 1) // self._num_threads
+
+            patient_ids = data["patient_id"]
 
             map_func_p = pickle.dumps(map_func)
 
-            for part in patients_per_part:
+            num_parts = 0
+            last_index = 0
+            for _ in range(self._num_threads):
+                next_index = min(num_rows, last_index + num_rows_per_shard)
+                while (next_index < num_rows) and (patient_ids[next_index - 1] == patient_ids[next_index]):
+                    next_index += 1
+
+                part = data.iloc[last_index:next_index]
                 self._input_queue.put((map_func_p, part))
 
-            return (self._result_queue.get() for _ in patients_per_part)
+                last_index = next_index
+                num_parts += 1
+
+                if last_index == num_rows:
+                    break
+
+            return (self._result_queue.get() for _ in range(num_parts))
         else:
             return iter((map_func(_row_generator(self._database, data)),))
 
