@@ -172,11 +172,11 @@ struct StringPropertyReader : PropertyReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
-    void get_property_data(int32_t patient_offset,
+    void get_property_data(int32_t subject_offset,
                                                    int32_t length, PyObject** result) {
-        uint64_t offset = data_file.data<uint64_t>()[patient_offset];
+        uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
-            data_file.data<uint64_t>()[patient_offset + 1] - offset;
+            data_file.data<uint64_t>()[subject_offset + 1] - offset;
 
         uint32_t* length_pointer =
             (uint32_t*)(data_file.bytes().data() + offset);
@@ -219,33 +219,33 @@ struct StringPropertyReader : PropertyReader {
                 num_null_bytes * sizeof(uint64_t),
             values.data(), value_size);
 
-        const char* start_of_per_patient = decompressed.data() + num_read +
+        const char* start_of_per_subject = decompressed.data() + num_read +
                                            sizeof(uint32_t) +
                                            num_null_bytes * sizeof(uint64_t);
 
-        uint32_t num_per_patient_values = values[0];
+        uint32_t num_per_subject_values = values[0];
 
-        if (dictionary.size() < dictionary_size + num_per_patient_values) {
-            dictionary.resize(dictionary_size + num_per_patient_values * 2);
+        if (dictionary.size() < dictionary_size + num_per_subject_values) {
+            dictionary.resize(dictionary_size + num_per_subject_values * 2);
         }
 
         size_t value_index = 1;
 
-        for (uint32_t i = 0; i < num_per_patient_values; i++) {
-            std::string_view view(start_of_per_patient, values[value_index]);
+        for (uint32_t i = 0; i < num_per_subject_values; i++) {
+            std::string_view view(start_of_per_subject, values[value_index]);
             PyObject* value_string =
                 PyUnicode_FromStringAndSize(view.data(), view.size());
             if (value_string == nullptr) {
                 throw std::runtime_error("Should never happen");
             }
             dictionary[dictionary_size + i] = value_string;
-            start_of_per_patient += values[value_index++];
+            start_of_per_subject += values[value_index++];
         }
 
-        if (start_of_per_patient - decompressed.data() > decompressed_size) {
+        if (start_of_per_subject - decompressed.data() > decompressed_size) {
             throw std::runtime_error(
                 "Decoded too much? " +
-                std::to_string(start_of_per_patient - decompressed.data()) +
+                std::to_string(start_of_per_subject - decompressed.data()) +
                 " " + std::to_string(decompressed_size));
         }
 
@@ -276,7 +276,7 @@ struct StringPropertyReader : PropertyReader {
             throw std::runtime_error("Out of bounds error for values " +
                                      std::to_string(value_index) + " " +
                                      std::to_string(value_size) + " " +
-                                     std::to_string(num_per_patient_values));
+                                     std::to_string(num_per_subject_values));
         }
     }
 };
@@ -304,11 +304,11 @@ struct TimePropertyReader : PropertyReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
-    void get_property_data(int32_t patient_offset,
+    void get_property_data(int32_t subject_offset,
                                                    int32_t length, PyObject** result) {
-        uint64_t offset = data_file.data<uint64_t>()[patient_offset];
+        uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
-            data_file.data<uint64_t>()[patient_offset + 1] - offset;
+            data_file.data<uint64_t>()[subject_offset + 1] - offset;
 
         uint32_t* length_pointer =
             (uint32_t*)(data_file.bytes().data() + offset);
@@ -458,11 +458,11 @@ struct PrimitivePropertyReader : PropertyReader {
 
     std::vector<char> decompressed;
 
-    void get_property_data(int32_t patient_offset,
+    void get_property_data(int32_t subject_offset,
                                                    int32_t length, PyObject** result) {
-        uint64_t offset = data_file.data<uint64_t>()[patient_offset];
+        uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
-            data_file.data<uint64_t>()[patient_offset + 1] - offset;
+            data_file.data<uint64_t>()[subject_offset + 1] - offset;
 
         uint32_t* length_pointer =
             (uint32_t*)(data_file.bytes().data() + offset);
@@ -607,10 +607,10 @@ struct NullMapReaderImpl : NullMapReader {
 
     std::vector<char> decompressed;
 
-    void get_null_map(int32_t patient_offset, int32_t length, uint64_t* result) {
-        uint64_t offset = data_file.data<uint64_t>()[patient_offset];
+    void get_null_map(int32_t subject_offset, int32_t length, uint64_t* result) {
+        uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
-            data_file.data<uint64_t>()[patient_offset + 1] - offset;
+            data_file.data<uint64_t>()[subject_offset + 1] - offset;
 
         uint32_t* length_pointer =
             (uint32_t*)(data_file.bytes().data() + offset);

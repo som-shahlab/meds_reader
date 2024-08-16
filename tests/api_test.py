@@ -31,39 +31,39 @@ def meds_dataset(tmpdir: str):
 
     entries = [
         {
-            "patient_id": 32,
+            "subject_id": 32,
             "time": None,
             "code": "Whatever",
             "other": "need",
             "numeric": 38,
         },
         {
-            "patient_id": 32,
+            "subject_id": 32,
             "time": datetime.datetime(2013, 10, 2),
             "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
             "code": "Whatever2",
         },
         {
-            "patient_id": 32,
+            "subject_id": 32,
             "time": datetime.datetime(2019, 12, 2),
             "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
             "code": "Whatever2",
         },
         {
-            "patient_id": 64,
+            "subject_id": 64,
             "time": datetime.datetime(2012, 10, 2),
             "code": "Whatever",
             "other": "need",
             "numeric": 38,
         },
         {
-            "patient_id": 64,
+            "subject_id": 64,
             "time": datetime.datetime(2013, 10, 2),
             "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
             "code": "Whatever2",
         },
         {
-            "patient_id": 64,
+            "subject_id": 64,
             "time": datetime.datetime(2013, 10, 2),
             "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
             "code": "Whatever3",
@@ -83,7 +83,7 @@ def meds_dataset(tmpdir: str):
 
 
 @pytest.fixture
-def patient_database(tmpdir: str, meds_dataset: str):
+def subject_database(tmpdir: str, meds_dataset: str):
 
     meds_reader_dir = os.path.join(tmpdir, "meds_reader")
 
@@ -92,36 +92,36 @@ def patient_database(tmpdir: str, meds_dataset: str):
         check=True,
     )
 
-    return meds_reader.PatientDatabase(str(meds_reader_dir))
+    return meds_reader.SubjectDatabase(str(meds_reader_dir))
 
 
-def test_metadata(patient_database):
-    with open(os.path.join(patient_database.path_to_database, "metadata", "dataset.json")) as f:
+def test_metadata(subject_database):
+    with open(os.path.join(subject_database.path_to_database, "metadata", "dataset.json")) as f:
         loaded_metadata = json.load(f)
     assert loaded_metadata == metadata
 
 
-def test_size(patient_database):
-    assert len(patient_database) == 2
+def test_size(subject_database):
+    assert len(subject_database) == 2
 
 
-def test_missing(patient_database):
+def test_missing(subject_database):
     with pytest.raises(KeyError):
-        patient_database[34234]
+        subject_database[34234]
 
 
-def test_iter(patient_database):
-    assert list(patient_database) == [32, 64]
+def test_iter(subject_database):
+    assert list(subject_database) == [32, 64]
 
 
-def test_map(patient_database):
-    def h(patients):
+def test_map(subject_database):
+    def h(subjects):
         result = []
-        for p in patients:
-            result.append(p.patient_id)
+        for p in subjects:
+            result.append(p.subject_id)
         return result
 
-    results = list(patient_database.map(h))
+    results = list(subject_database.map(h))
 
     final_result = {a for b in results for a in b}
 
@@ -129,18 +129,18 @@ def test_map(patient_database):
 
     assert final_result == {32, 64}
 
-    table = pd.DataFrame({"patient_id": [64, 32], "other": [1, 1000]})
+    table = pd.DataFrame({"subject_id": [64, 32], "other": [1, 1000]})
 
-    def h2(patients_and_data):
+    def h2(subjects_and_data):
         result = []
-        for patient, rows in patients_and_data:
+        for subject, rows in subjects_and_data:
             assert len(rows) == 1
             row = rows[0]
-            print(patient, row)
-            result.append((patient.patient_id, row.other))
+            print(subject, row)
+            result.append((subject.subject_id, row.other))
         return result
 
-    results = list(patient_database.map_with_data(h2, table))
+    results = list(subject_database.map_with_data(h2, table))
 
     final_result = {a for b in results for a in b}
 
@@ -149,9 +149,9 @@ def test_map(patient_database):
     assert final_result == {(32, 1000), (64, 1)}
 
 
-def test_properties(patient_database):
-    print(patient_database.properties)
-    assert patient_database.properties == {
+def test_properties(subject_database):
+    print(subject_database.properties)
+    assert subject_database.properties == {
         "code": pa.string(),
         "datetime_value": pa.timestamp("us"),
         "numeric_value": pa.float32(),
@@ -161,18 +161,18 @@ def test_properties(patient_database):
     }
 
 
-def test_missing_property(patient_database):
-    p = patient_database[32]
+def test_missing_property(subject_database):
+    p = subject_database[32]
     e = p.events[0]
 
     with pytest.raises(AttributeError):
         print(e.missing)
 
 
-def test_lookup(patient_database):
-    p = patient_database[32]
+def test_lookup(subject_database):
+    p = subject_database[32]
 
-    assert p.patient_id == 32
+    assert p.subject_id == 32
 
     assert len(p.events) == 3
 
@@ -203,15 +203,15 @@ def test_lookup(patient_database):
     }
 
 
-def test_filter(patient_database):
-    sub_database = patient_database.filter([32])
+def test_filter(subject_database):
+    sub_database = subject_database.filter([32])
 
     assert len(sub_database) == 1
     assert list(sub_database) == [32]
 
-    p = patient_database[32]
+    p = subject_database[32]
 
-    assert p.patient_id == 32
+    assert p.subject_id == 32
 
     assert len(p.events) == 3
 
@@ -232,11 +232,11 @@ def test_filter(patient_database):
 
 
 def _example_transform(
-    patient: meds_reader.transform.MutablePatient,
-) -> meds_reader.transform.MutablePatient:
-    patient.patient_id *= 10
-    print(patient)
-    return patient
+    subject: meds_reader.transform.MutableSubject,
+) -> meds_reader.transform.MutableSubject:
+    subject.subject_id *= 10
+    print(subject)
+    return subject
 
 
 def test_transform(tmpdir: str, meds_dataset: str):
@@ -251,7 +251,7 @@ def test_transform(tmpdir: str, meds_dataset: str):
         check=True,
     )
 
-    database = meds_reader.PatientDatabase(str(meds_reader_dir))
+    database = meds_reader.SubjectDatabase(str(meds_reader_dir))
 
     assert len(database) == 2
 

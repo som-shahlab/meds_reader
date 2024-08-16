@@ -324,7 +324,7 @@ struct SharedFile {
 };
 
 void sort_concatenate_shards(int i, const std::filesystem::path& root_path,
-                             SharedFile& data_file, int num_patients_per_shard,
+                             SharedFile& data_file, int num_subjects_per_shard,
                              int num_shards_per_thread) {
     for (int j = 0; j < num_shards_per_thread; j++) {
         int shard = i + j * data_file.num_threads;
@@ -396,7 +396,7 @@ size_t get_num_shards(int num_threads, size_t estimated_size) {
 
 void write_files(
     int thread_index, const std::filesystem::path& root_path,
-    int num_patients_per_shard, int shards_per_thread,
+    int num_subjects_per_shard, int shards_per_thread,
     CappedQueueReceiver<std::pair<uint32_t, std::vector<char>>>& receiver) {
     std::pair<uint32_t, std::vector<char>> entry;
 
@@ -413,7 +413,7 @@ void write_files(
             return;
         }
 
-        int shard = entry.first / num_patients_per_shard;
+        int shard = entry.first / num_subjects_per_shard;
         int shard_offset = shard % shards_per_thread;
 
         uint32_t header[2] = {entry.first, (uint32_t)entry.second.size()};
@@ -531,7 +531,7 @@ read_files(std::filesystem::path root_directory, int num_threads) {
         work_entries.push_back(std::make_pair(dir_entry.path(), index));
     }
 
-    properties.erase("patient_id");
+    properties.erase("subject_id");
 
     std::vector<std::pair<std::string, std::shared_ptr<arrow::DataType>>>
         properties_list(std::begin(properties), std::end(properties));
@@ -544,7 +544,7 @@ std::set<std::string> known_properties = {"code", "numeric_value"};
 template <typename F, typename A>
 void iterate_strings_helper(
     const std::filesystem::path& filename, const std::string& property_name,
-    const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
+    const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
     const absl::flat_hash_map<std::string, size_t>& dictionary_entries,
     F func) {
     arrow::MemoryPool* pool = arrow::default_memory_pool();
@@ -573,12 +573,12 @@ void iterate_strings_helper(
 
     std::vector<int> columns = {(int)column};
 
-    size_t next_patient_index = 0;
+    size_t next_subject_index = 0;
     size_t remaining_events = 0;
     size_t current_position = 0;
     bool has_event = false;
 
-    absl::flat_hash_map<std::string, uint32_t> per_patient_values;
+    absl::flat_hash_map<std::string, uint32_t> per_subject_values;
 
     std::vector<char> null_bytes;
     std::vector<uint32_t> text_value_lengths;
@@ -594,7 +594,7 @@ void iterate_strings_helper(
         bitset.reset();
     };
 
-    auto flush_patient = [&]() {
+    auto flush_subject = [&]() {
         if (offset_in_bitset != 0) {
             flush();
         }
@@ -638,8 +638,8 @@ void iterate_strings_helper(
         if (iter != std::end(dictionary_entries)) {
             values.push_back(iter->second);
         } else {
-            auto custom = per_patient_values.try_emplace(
-                text, per_patient_values.size() + dictionary_entries.size());
+            auto custom = per_subject_values.try_emplace(
+                text, per_subject_values.size() + dictionary_entries.size());
 
             if (custom.second) {
                 text_value_lengths.push_back(text.size());
@@ -659,16 +659,16 @@ void iterate_strings_helper(
     auto add_value = [&](std::string_view value) {
         if (!has_event || (remaining_events == 0)) {
             if (has_event) {
-                flush_patient();
+                flush_subject();
             } else {
                 has_event = true;
             }
 
-            auto next = patient_positions[next_patient_index++];
+            auto next = subject_positions[next_subject_index++];
             current_position = next.first;
             remaining_events = next.second;
 
-            per_patient_values.clear();
+            per_subject_values.clear();
             null_bytes.clear();
             text_value_lengths.clear();
             text_value_lengths.push_back(0);
@@ -721,7 +721,7 @@ void iterate_strings_helper(
     }
 
     if (has_event) {
-        flush_patient();
+        flush_subject();
     }
 }
 
@@ -731,19 +731,19 @@ void iterate_strings(
 
     const std::shared_ptr<arrow::DataType>& type,
 
-    const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
+    const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
     const absl::flat_hash_map<std::string, size_t>& dictionary_entries,
     F func) {
     switch (type->id()) {
         case arrow::Type::STRING:
             iterate_strings_helper<F, arrow::StringArray>(
-                filename, property_name, patient_positions, dictionary_entries,
+                filename, property_name, subject_positions, dictionary_entries,
                 func);
             break;
 
         case arrow::Type::LARGE_STRING:
             iterate_strings_helper<F, arrow::LargeStringArray>(
-                filename, property_name, patient_positions, dictionary_entries,
+                filename, property_name, subject_positions, dictionary_entries,
                 func);
             break;
 
@@ -755,7 +755,7 @@ void iterate_strings(
 template <typename A>
 void string_reader_thread_helper(
     const std::filesystem::path& filename, const std::string& property_name,
-    const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
+    const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
     CappedQueueSender<std::pair<std::string, uint64_t>>& sender) {
     arrow::MemoryPool* pool = arrow::default_memory_pool();
 
@@ -784,11 +784,11 @@ void string_reader_thread_helper(
 
     absl::flat_hash_map<std::string, uint64_t> items;
 
-    size_t next_patient_index = 0;
+    size_t next_subject_index = 0;
     size_t remaining_events;
     bool has_event = false;
 
-    auto flush_patient = [&]() {
+    auto flush_subject = [&]() {
         for (auto& item : items) {
             size_t h = std::hash<std::string>{}(item.first);
             size_t partition = h % sender.num_threads;
@@ -802,13 +802,13 @@ void string_reader_thread_helper(
     auto add_value = [&](std::string_view item) {
         if (!has_event || (remaining_events == 0)) {
             if (has_event) {
-                flush_patient();
+                flush_subject();
             } else {
                 has_event = true;
             }
 
             items.clear();
-            remaining_events = patient_positions[next_patient_index++].second;
+            remaining_events = subject_positions[next_subject_index++].second;
         }
 
         if (!item.empty()) {
@@ -843,24 +843,24 @@ void string_reader_thread_helper(
     }
 
     if (items.size() != 0) {
-        flush_patient();
+        flush_subject();
     }
 }
 
 void string_reader_thread(
     const std::filesystem::path& filename, const std::string& property_name,
     const std::shared_ptr<arrow::DataType>& type,
-    const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
+    const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
     CappedQueueSender<std::pair<std::string, uint64_t>>& sender) {
     switch (type->id()) {
         case arrow::Type::STRING:
             string_reader_thread_helper<arrow::StringArray>(
-                filename, property_name, patient_positions, sender);
+                filename, property_name, subject_positions, sender);
             break;
 
         case arrow::Type::LARGE_STRING:
             string_reader_thread_helper<arrow::LargeStringArray>(
-                filename, property_name, patient_positions, sender);
+                filename, property_name, subject_positions, sender);
             break;
 
         default:
@@ -961,9 +961,9 @@ std::vector<std::pair<uint64_t, std::string>> merger_thread(
     uint64_t current_count = 0;
 
     auto flush = [&]() {
-        uint64_t num_patients = current_count >> 32;
+        uint64_t num_subjects = current_count >> 32;
         uint64_t num_times = current_count % (((uint64_t)1) << 32);
-        if (num_patients > 1) {
+        if (num_subjects > 1) {
             entries.emplace_back(num_times, std::move(current_value));
         }
     };
@@ -1080,14 +1080,14 @@ void run_reader_writer(const std::vector<WorkEntry>& work_entries,
 template <typename F>
 std::pair<std::vector<std::vector<char>>, size_t> get_samples(
     std::filesystem::path filename,
-    const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
+    const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
     size_t num_samples, F func) {
     size_t sample_count = 0;
     std::vector<std::vector<char>> samples;
 
     size_t estimated_size = 0;
 
-    func(filename, patient_positions,
+    func(filename, subject_positions,
          [&](uint32_t position, std::vector<char> bytes) {
              sample_count++;
              estimated_size += bytes.size();
@@ -1108,8 +1108,8 @@ std::pair<std::vector<std::vector<char>>, size_t> get_samples(
 template <typename F>
 void read_files(
     const std::filesystem::path& filename,
-    const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
-    const std::vector<char>& dictionary, int num_patients_per_shard,
+    const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
+    const std::vector<char>& dictionary, int num_subjects_per_shard,
     int num_shards_per_thread,
     CappedQueueSender<std::pair<uint32_t, std::vector<char>>>& sender, F func) {
     auto context_deleter = [](ZSTD_CCtx* context) { ZSTD_freeCCtx(context); };
@@ -1130,7 +1130,7 @@ void read_files(
         throw std::runtime_error("Could not load the dictionary");
     }
 
-    func(filename, patient_positions,
+    func(filename, subject_positions,
          [&](uint32_t position, std::vector<char> bytes) {
              std::vector<char> final_bytes(sizeof(uint32_t) +
                                            ZSTD_compressBound(bytes.size()));
@@ -1147,7 +1147,7 @@ void read_files(
              uint32_t* length_pointer = (uint32_t*)final_bytes.data();
              *length_pointer = bytes.size();
 
-             int shard = position / num_patients_per_shard;
+             int shard = position / num_subjects_per_shard;
 
              int thread = shard / num_shards_per_thread;
 
@@ -1159,9 +1159,9 @@ template <typename I>
 void process_generic_property(
     const std::filesystem::path& string_path, const std::string& property_name,
     const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>&
-        patient_positions,
+        subject_positions,
     const std::vector<WorkEntry>& work_entries, int num_threads,
-    int num_patients, I iterate) {
+    int num_subjects, I iterate) {
     // We have to start by reading everything in
 
     std::vector<std::vector<std::vector<char>>> all_samples(
@@ -1173,10 +1173,10 @@ void process_generic_property(
     std::atomic<size_t> estimated_size;
 
     run_all(work_entries, num_threads,
-            [&all_samples, &property_name, &patient_positions, &estimated_size,
+            [&all_samples, &property_name, &subject_positions, &estimated_size,
              num_samples_per_entry,
              &iterate](std::filesystem::path path, size_t index) {
-                auto res = get_samples(path, patient_positions[index],
+                auto res = get_samples(path, subject_positions[index],
                                        num_samples_per_entry, iterate);
                 all_samples[index] = std::move(res.first);
                 estimated_size.fetch_add(res.second);
@@ -1186,7 +1186,7 @@ void process_generic_property(
     std::vector<char> sample_buffer;
 
     int num_shards = get_num_shards(num_threads, estimated_size);
-    int num_patients_per_shard = (num_patients + num_shards - 1) / num_shards;
+    int num_subjects_per_shard = (num_subjects + num_shards - 1) / num_shards;
     int num_shards_per_thread = (num_shards + num_threads - 1) / num_threads;
 
     for (const auto& samples : all_samples) {
@@ -1218,27 +1218,27 @@ void process_generic_property(
     }
 
     auto reader =
-        [&string_path, &property_name, &patient_positions, &dictionary,
-         num_patients_per_shard, num_shards_per_thread, &iterate](
+        [&string_path, &property_name, &subject_positions, &dictionary,
+         num_subjects_per_shard, num_shards_per_thread, &iterate](
             const std::filesystem::path& path, size_t index,
             CappedQueueSender<std::pair<uint32_t, std::vector<char>>>& sender) {
-            read_files(path, patient_positions[index], dictionary,
-                       num_patients_per_shard, num_shards_per_thread, sender,
+            read_files(path, subject_positions[index], dictionary,
+                       num_subjects_per_shard, num_shards_per_thread, sender,
                        iterate);
         };
 
     auto writer =
-        [&string_path, num_patients_per_shard, num_shards_per_thread](
+        [&string_path, num_subjects_per_shard, num_shards_per_thread](
             int i, CappedQueueReceiver<std::pair<uint32_t, std::vector<char>>>&
                        receiver) {
-            write_files(i, string_path, num_patients_per_shard,
+            write_files(i, string_path, num_subjects_per_shard,
                         num_shards_per_thread, receiver);
         };
 
     run_reader_writer<std::pair<uint32_t, std::vector<char>>>(
         work_entries, num_threads, reader, writer);
 
-    uint64_t starting_offset = (num_patients + 1) * sizeof(uint64_t);
+    uint64_t starting_offset = (num_subjects + 1) * sizeof(uint64_t);
     SharedFile data_file(string_path / "data", num_threads);
     data_file.file.write((const char*)&starting_offset,
                          sizeof(starting_offset));
@@ -1247,9 +1247,9 @@ void process_generic_property(
     std::vector<std::thread> threads;
     for (int i = 0; i < num_threads; i++) {
         threads.emplace_back([i, &string_path, &data_file,
-                              num_patients_per_shard, num_shards_per_thread]() {
+                              num_subjects_per_shard, num_shards_per_thread]() {
             sort_concatenate_shards(i, string_path, data_file,
-                                    num_patients_per_shard,
+                                    num_subjects_per_shard,
                                     num_shards_per_thread);
         });
     }
@@ -1263,19 +1263,19 @@ void process_string_property(
     const std::string& property_name,
     const std::shared_ptr<arrow::DataType>& type,
     const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>&
-        patient_positions,
+        subject_positions,
     std::filesystem::path temp_path, const std::vector<WorkEntry>& work_entries,
-    int num_threads, int num_patients) {
+    int num_threads, int num_subjects) {
     std::filesystem::path string_path = temp_path / property_name;
     std::filesystem::create_directories(string_path);
 
     // We have to start by reading everything in
     auto reader =
-        [&property_name, &type, &patient_positions](
+        [&property_name, &type, &subject_positions](
             const std::filesystem::path& fname, size_t index,
             CappedQueueSender<std::pair<std::string, uint64_t>>& sender) {
             string_reader_thread(fname, property_name, type,
-                                 patient_positions[index], sender);
+                                 subject_positions[index], sender);
         };
 
     auto writer =
@@ -1363,20 +1363,20 @@ void process_string_property(
     auto iterate =
         [&property_name, &type, &dictionary_entries](
             const std::filesystem::path& path,
-            const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
+            const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
             auto func) {
-            return iterate_strings(path, property_name, type, patient_positions,
+            return iterate_strings(path, property_name, type, subject_positions,
                                    dictionary_entries, func);
         };
 
-    process_generic_property(string_path, property_name, patient_positions,
-                             work_entries, num_threads, num_patients, iterate);
+    process_generic_property(string_path, property_name, subject_positions,
+                             work_entries, num_threads, num_subjects, iterate);
 }
 
 template <typename F>
 void iterate_primitive(
     std::filesystem::path filename, std::string property_name,
-    const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
+    const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
     F func) {
     arrow::MemoryPool* pool = arrow::default_memory_pool();
 
@@ -1403,7 +1403,7 @@ void iterate_primitive(
     int64_t column = properties.find(property_name)->second.second;
     std::vector<int> columns = {(int)column};
 
-    size_t next_patient_index = 0;
+    size_t next_subject_index = 0;
     size_t remaining_events = 0;
     size_t current_position = 0;
     bool has_event = false;
@@ -1421,7 +1421,7 @@ void iterate_primitive(
         bitset.reset();
     };
 
-    auto flush_patient = [&]() {
+    auto flush_subject = [&]() {
         if (offset_in_bitset != 0) {
             flush();
         }
@@ -1453,12 +1453,12 @@ void iterate_primitive(
     auto add_value = [&](std::string_view value) {
         if (!has_event || (remaining_events == 0)) {
             if (has_event) {
-                flush_patient();
+                flush_subject();
             } else {
                 has_event = true;
             }
 
-            auto next = patient_positions[next_patient_index++];
+            auto next = subject_positions[next_subject_index++];
             current_position = next.first;
             remaining_events = next.second;
 
@@ -1516,36 +1516,36 @@ void iterate_primitive(
     }
 
     if (has_event) {
-        flush_patient();
+        flush_subject();
     }
 }
 
 void process_primitive_property(
     const std::string& property_name,
     const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>&
-        patient_positions,
+        subject_positions,
     std::filesystem::path temp_path, const std::vector<WorkEntry>& work_entries,
-    int num_threads, int num_patients) {
+    int num_threads, int num_subjects) {
     std::filesystem::path string_path = temp_path / property_name;
     std::filesystem::create_directories(string_path);
 
     auto iterate =
         [&property_name](
             const std::filesystem::path& path,
-            const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
+            const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
             auto func) {
-            return iterate_primitive(path, property_name, patient_positions,
+            return iterate_primitive(path, property_name, subject_positions,
                                      func);
         };
 
-    process_generic_property(string_path, property_name, patient_positions,
-                             work_entries, num_threads, num_patients, iterate);
+    process_generic_property(string_path, property_name, subject_positions,
+                             work_entries, num_threads, num_subjects, iterate);
 }
 
 template <typename F>
 void iterate_time(
     std::filesystem::path filename, std::string property_name,
-    const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
+    const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
     F func) {
     arrow::MemoryPool* pool = arrow::default_memory_pool();
 
@@ -1572,7 +1572,7 @@ void iterate_time(
     int64_t column = properties.find(property_name)->second.second;
     std::vector<int> columns = {(int)column};
 
-    size_t next_patient_index = 0;
+    size_t next_subject_index = 0;
     size_t remaining_events = 0;
     uint32_t current_position = 0;
     bool has_event = false;
@@ -1624,7 +1624,7 @@ void iterate_time(
         }
     };
 
-    auto flush_patient = [&]() {
+    auto flush_subject = [&]() {
         flush_timestamp();
 
         values[0] = num_null_timestamps;
@@ -1650,12 +1650,12 @@ void iterate_time(
     auto add_time = [&](std::optional<int64_t> time) {
         if (!has_event || (remaining_events == 0)) {
             if (has_event) {
-                flush_patient();
+                flush_subject();
             } else {
                 has_event = true;
             }
 
-            auto next = patient_positions[next_patient_index++];
+            auto next = subject_positions[next_subject_index++];
             current_position = next.first;
             remaining_events = next.second;
 
@@ -1668,7 +1668,7 @@ void iterate_time(
         if (time == std::nullopt) {
             if (starting_timestamp != std::nullopt) {
                 throw std::runtime_error(
-                    "Should only get null times at the start of a patient");
+                    "Should only get null times at the start of a subject");
             }
             num_null_timestamps++;
         } else {
@@ -1725,32 +1725,32 @@ void iterate_time(
     }
 
     if (has_event) {
-        flush_patient();
+        flush_subject();
     }
 }
 
 void process_time_property(
     const std::string& property_name,
     const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>&
-        patient_positions,
+        subject_positions,
     std::filesystem::path temp_path, const std::vector<WorkEntry>& work_entries,
-    int num_threads, int num_patients) {
+    int num_threads, int num_subjects) {
     std::filesystem::path string_path = temp_path / property_name;
     std::filesystem::create_directories(string_path);
 
     auto iterate =
         [&property_name](
             const std::filesystem::path& path,
-            const std::vector<std::pair<uint32_t, uint32_t>>& patient_positions,
+            const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
             auto func) {
-            return iterate_time(path, property_name, patient_positions, func);
+            return iterate_time(path, property_name, subject_positions, func);
         };
 
-    process_generic_property(string_path, property_name, patient_positions,
-                             work_entries, num_threads, num_patients, iterate);
+    process_generic_property(string_path, property_name, subject_positions,
+                             work_entries, num_threads, num_subjects, iterate);
 }
 
-std::vector<std::pair<int64_t, uint32_t>> get_patient_ids(
+std::vector<std::pair<int64_t, uint32_t>> get_subject_ids(
     std::filesystem::path filename) {
     arrow::MemoryPool* pool = arrow::default_memory_pool();
 
@@ -1774,31 +1774,31 @@ std::vector<std::pair<int64_t, uint32_t>> get_patient_ids(
 
     auto properties = get_properties(arrow_reader->manifest());
 
-    int64_t patient_id_column = properties.find("patient_id")->second.second;
-    std::vector<int> columns = {(int)patient_id_column};
+    int64_t subject_id_column = properties.find("subject_id")->second.second;
+    std::vector<int> columns = {(int)subject_id_column};
 
     std::vector<std::pair<int64_t, uint32_t>> result;
 
     bool has_event = false;
-    int64_t current_patient_id = 0;
-    size_t current_patient_length = 0;
+    int64_t current_subject_id = 0;
+    size_t current_subject_length = 0;
 
-    auto flush_patient = [&]() {
-        result.emplace_back(current_patient_id, current_patient_length);
+    auto flush_subject = [&]() {
+        result.emplace_back(current_subject_id, current_subject_length);
     };
 
-    auto add_patient_id = [&](int64_t patient_id) {
-        if (!has_event || (patient_id != current_patient_id)) {
+    auto add_subject_id = [&](int64_t subject_id) {
+        if (!has_event || (subject_id != current_subject_id)) {
             if (has_event) {
-                flush_patient();
+                flush_subject();
             } else {
                 has_event = true;
             }
-            current_patient_id = patient_id;
-            current_patient_length = 0;
+            current_subject_id = subject_id;
+            current_subject_length = 0;
         }
 
-        current_patient_length++;
+        current_subject_length++;
     };
 
     for (int64_t row_group = 0; row_group < arrow_reader->num_row_groups();
@@ -1807,36 +1807,36 @@ std::vector<std::pair<int64_t, uint32_t>> get_patient_ids(
         PARQUET_THROW_NOT_OK(
             arrow_reader->ReadRowGroup(row_group, columns, &table));
 
-        auto chunked_patient_id = table->GetColumnByName("patient_id");
+        auto chunked_subject_id = table->GetColumnByName("subject_id");
 
-        if (chunked_patient_id == nullptr) {
+        if (chunked_subject_id == nullptr) {
             throw std::runtime_error("Could not get column");
         }
 
-        for (const auto& patient_id_chunk : chunked_patient_id->chunks()) {
-            auto patient_id =
-                std::dynamic_pointer_cast<arrow::Int64Array>(patient_id_chunk);
-            if (patient_id == nullptr) {
-                throw std::runtime_error("Could not cast patient_id");
+        for (const auto& subject_id_chunk : chunked_subject_id->chunks()) {
+            auto subject_id =
+                std::dynamic_pointer_cast<arrow::Int64Array>(subject_id_chunk);
+            if (subject_id == nullptr) {
+                throw std::runtime_error("Could not cast subject_id");
             }
 
-            for (int64_t i = 0; i < patient_id->length(); i++) {
-                if (!patient_id->IsValid(i)) {
+            for (int64_t i = 0; i < subject_id->length(); i++) {
+                if (!subject_id->IsValid(i)) {
                     throw std::runtime_error("Invalid timestamp");
                 }
-                add_patient_id(patient_id->Value(i));
+                add_subject_id(subject_id->Value(i));
             }
         }
     }
 
     if (has_event) {
-        flush_patient();
+        flush_subject();
     }
 
     return result;
 }
 
-std::vector<std::vector<std::pair<int64_t, uint32_t>>> process_patient_id(
+std::vector<std::vector<std::pair<int64_t, uint32_t>>> process_subject_id(
     std::filesystem::path temp_path, const std::vector<WorkEntry>& work_entries,
     int num_threads) {
     std::vector<std::vector<std::pair<int64_t, uint32_t>>> result(
@@ -1844,7 +1844,7 @@ std::vector<std::vector<std::pair<int64_t, uint32_t>>> process_patient_id(
 
     run_all(work_entries, num_threads,
             [&temp_path, &result](std::filesystem::path path, size_t index) {
-                result[index] = get_patient_ids(path);
+                result[index] = get_subject_ids(path);
             });
 
     return result;
@@ -1897,22 +1897,22 @@ void process_property(
     const std::string& property_name,
     const std::shared_ptr<arrow::DataType>& type,
     const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>&
-        patient_positions,
+        subject_positions,
     const std::filesystem::path& temp_path,
     const std::vector<WorkEntry>& work_entries, int num_threads,
-    int num_patients) {
+    int num_subjects) {
     if (property_name == "time") {
-        process_time_property(property_name, patient_positions, temp_path,
-                              work_entries, num_threads, num_patients);
+        process_time_property(property_name, subject_positions, temp_path,
+                              work_entries, num_threads, num_subjects);
         return;
     }
 
     switch (type->id()) {
         case arrow::Type::STRING:
         case arrow::Type::LARGE_STRING:
-            process_string_property(property_name, type, patient_positions,
+            process_string_property(property_name, type, subject_positions,
                                     temp_path, work_entries, num_threads,
-                                    num_patients);
+                                    num_subjects);
             return;
 
         case arrow::Type::TIMESTAMP:
@@ -1926,9 +1926,9 @@ void process_property(
         case arrow::Type::UINT16:
         case arrow::Type::UINT32:
         case arrow::Type::UINT64:
-            process_primitive_property(property_name, patient_positions,
+            process_primitive_property(property_name, subject_positions,
                                        temp_path, work_entries, num_threads,
-                                       num_patients);
+                                       num_subjects);
             return;
 
         default:
@@ -1940,15 +1940,15 @@ void process_property(
 }
 
 template <typename F>
-void run_all_simple(int num_patients, int num_threads, F func) {
+void run_all_simple(int num_subjects, int num_threads, F func) {
     std::vector<std::thread> threads;
 
-    int patients_per_thread = (num_patients + num_threads - 1) / num_threads;
+    int subjects_per_thread = (num_subjects + num_threads - 1) / num_threads;
 
     for (int i = 0; i < num_threads; i++) {
-        threads.emplace_back([&func, i, num_patients, patients_per_thread]() {
-            int start = std::min(num_patients, patients_per_thread * i);
-            int end = std::min(num_patients, patients_per_thread * (i + 1));
+        threads.emplace_back([&func, i, num_subjects, subjects_per_thread]() {
+            int start = std::min(num_subjects, subjects_per_thread * i);
+            int end = std::min(num_subjects, subjects_per_thread * (i + 1));
             func(i, start, end);
         });
     }
@@ -1980,11 +1980,11 @@ struct PropertyNullReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
-    std::vector<uint64_t> get_null_bytes(int32_t patient_offset,
+    std::vector<uint64_t> get_null_bytes(int32_t subject_offset,
                                          int32_t length) {
-        uint64_t offset = data_file.data<uint64_t>()[patient_offset];
+        uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
-            data_file.data<uint64_t>()[patient_offset + 1] - offset;
+            data_file.data<uint64_t>()[subject_offset + 1] - offset;
 
         uint32_t* length_pointer =
             (uint32_t*)(data_file.bytes().data() + offset);
@@ -2067,11 +2067,11 @@ void iterate_null_map(std::vector<PropertyNullReader>& readers,
                       int32_t end, F func) {
     std::vector<std::vector<uint64_t>> null_maps(readers.size());
 
-    for (int32_t patient_id = start; patient_id < end; patient_id++) {
-        int32_t length = length_map[patient_id];
+    for (int32_t subject_id = start; subject_id < end; subject_id++) {
+        int32_t length = length_map[subject_id];
 
         for (size_t i = 0; i < readers.size(); i++) {
-            null_maps[i] = readers[i].get_null_bytes(patient_id, length);
+            null_maps[i] = readers[i].get_null_bytes(subject_id, length);
         }
 
         std::vector<char> bytes(sizeof(T) * length);
@@ -2191,9 +2191,9 @@ void process_null_map(
     const std::vector<std::pair<std::string, std::shared_ptr<arrow::DataType>>>&
         properties,
     const std::filesystem::path& destination_path, int num_threads,
-    int num_patients) {
+    int num_subjects) {
     MmapFile length_file(destination_path / "meds_reader.length");
-    absl::Span<const int32_t> patient_lengths = length_file.data<int32_t>();
+    absl::Span<const int32_t> subject_lengths = length_file.data<int32_t>();
 
     std::vector<MmapFile> zdict_files;
     std::vector<MmapFile> data_files;
@@ -2223,11 +2223,11 @@ void process_null_map(
 
     size_t num_samples_per_entry = (10 * 1000 + num_threads - 1) / num_threads;
 
-    run_all_simple(num_patients, num_threads,
-                   [&all_samples, &property_readers, &patient_lengths,
+    run_all_simple(num_subjects, num_threads,
+                   [&all_samples, &property_readers, &subject_lengths,
                     num_samples_per_entry](size_t index, int start, int end) {
                        all_samples[index] = get_null_map_samples<T>(
-                           property_readers[index], patient_lengths, start, end,
+                           property_readers[index], subject_lengths, start, end,
                            num_samples_per_entry);
                    });
 
@@ -2266,17 +2266,17 @@ void process_null_map(
         num_threads);
 
     run_all_simple(
-        num_patients, num_threads,
-        [&all_lengths, &property_readers, &string_path, &patient_lengths,
+        num_subjects, num_threads,
+        [&all_lengths, &property_readers, &string_path, &subject_lengths,
          &dictionary](size_t index, int start, int end) {
             std::filesystem::path target_path =
                 string_path / (std::to_string(index) + ".data");
             all_lengths[index] =
-                write_null_map<T>(property_readers[index], patient_lengths,
+                write_null_map<T>(property_readers[index], subject_lengths,
                                   start, end, dictionary, target_path);
         });
 
-    uint64_t current_offset = (num_patients + 1) * sizeof(uint64_t);
+    uint64_t current_offset = (num_subjects + 1) * sizeof(uint64_t);
 
     for (auto& length : all_lengths) {
         size_t temp = length.first;
@@ -2286,7 +2286,7 @@ void process_null_map(
         current_offset += temp;
     }
 
-    run_all_simple(num_patients, num_threads,
+    run_all_simple(num_subjects, num_threads,
                    [&all_lengths](size_t index, int start, int end) {
                        auto& item = all_lengths[index];
                        for (auto& val : item.second) {
@@ -2367,73 +2367,73 @@ void create_database(const char* source, const char* destination,
         }
     }
 
-    auto patient_ids_and_lengths =
-        process_patient_id(destination_path, work_entries, num_threads);
+    auto subject_ids_and_lengths =
+        process_subject_id(destination_path, work_entries, num_threads);
 
     std::vector<std::tuple<int64_t, uint32_t, uint32_t, uint32_t>>
-        patient_ids_and_location;
-    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> patient_positions;
+        subject_ids_and_location;
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> subject_positions;
 
-    for (size_t i = 0; i < patient_ids_and_lengths.size(); i++) {
-        patient_positions.emplace_back(patient_ids_and_lengths[i].size());
-        for (size_t j = 0; j < patient_ids_and_lengths[i].size(); j++) {
-            auto e = patient_ids_and_lengths[i][j];
-            patient_ids_and_location.emplace_back(e.first, e.second, i, j);
+    for (size_t i = 0; i < subject_ids_and_lengths.size(); i++) {
+        subject_positions.emplace_back(subject_ids_and_lengths[i].size());
+        for (size_t j = 0; j < subject_ids_and_lengths[i].size(); j++) {
+            auto e = subject_ids_and_lengths[i][j];
+            subject_ids_and_location.emplace_back(e.first, e.second, i, j);
         }
     }
 
-    pdqsort(std::begin(patient_ids_and_location),
-            std::end(patient_ids_and_location));
+    pdqsort(std::begin(subject_ids_and_location),
+            std::end(subject_ids_and_location));
 
-    std::vector<int64_t> flat_patient_ids;
-    std::vector<uint32_t> flat_patient_lengths;
+    std::vector<int64_t> flat_subject_ids;
+    std::vector<uint32_t> flat_subject_lengths;
 
-    for (size_t i = 0; i < patient_ids_and_location.size(); i++) {
-        auto entry = patient_ids_and_location[i];
-        flat_patient_ids.emplace_back(std::get<0>(entry));
-        flat_patient_lengths.emplace_back(std::get<1>(entry));
-        patient_positions[std::get<2>(entry)][std::get<3>(entry)] = {
+    for (size_t i = 0; i < subject_ids_and_location.size(); i++) {
+        auto entry = subject_ids_and_location[i];
+        flat_subject_ids.emplace_back(std::get<0>(entry));
+        flat_subject_lengths.emplace_back(std::get<1>(entry));
+        subject_positions[std::get<2>(entry)][std::get<3>(entry)] = {
             i, std::get<1>(entry)};
     }
 
     {
-        std::ofstream patient_ids_file(
-            destination_path / "patient_id",
+        std::ofstream subject_ids_file(
+            destination_path / "subject_id",
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 
-        patient_ids_file.write((const char*)flat_patient_ids.data(),
-                               sizeof(int64_t) * flat_patient_ids.size());
+        subject_ids_file.write((const char*)flat_subject_ids.data(),
+                               sizeof(int64_t) * flat_subject_ids.size());
 
-        std::ofstream patient_lengths_file(
+        std::ofstream subject_lengths_file(
             destination_path / "meds_reader.length",
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 
-        patient_lengths_file.write(
-            (const char*)flat_patient_lengths.data(),
-            sizeof(uint32_t) * flat_patient_lengths.size());
+        subject_lengths_file.write(
+            (const char*)flat_subject_lengths.data(),
+            sizeof(uint32_t) * flat_subject_lengths.size());
     }
 
-    size_t num_patients = patient_ids_and_location.size();
+    size_t num_subjects = subject_ids_and_location.size();
 
     for (const auto& property : properties) {
-        process_property(property.first, property.second, patient_positions,
+        process_property(property.first, property.second, subject_positions,
                          destination_path, work_entries, num_threads,
-                         num_patients);
+                         num_subjects);
     }
 
     if (properties.size() > 64) {
         throw std::runtime_error("Too many properties");
     } else if (properties.size() > 32) {
         process_null_map<uint64_t>(properties, destination_path, num_threads,
-                                   num_patients);
+                                   num_subjects);
     } else if (properties.size() > 16) {
         process_null_map<uint32_t>(properties, destination_path, num_threads,
-                                   num_patients);
+                                   num_subjects);
     } else if (properties.size() > 8) {
         process_null_map<uint16_t>(properties, destination_path, num_threads,
-                                   num_patients);
+                                   num_subjects);
     } else {
         process_null_map<uint8_t>(properties, destination_path, num_threads,
-                                  num_patients);
+                                  num_subjects);
     }
 }

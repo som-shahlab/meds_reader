@@ -6,7 +6,7 @@
 int main(int argc, char** argv) {
     CLI::App app{
         "meds_reader_convert is a program for converting a MEDS dataset to a "
-        "meds_reader PatientDatabase.",
+        "meds_reader SubjectDatabase.",
         "meds_reader_convert"};
     argv = app.ensure_utf8(argv);
 

@@ -20,7 +20,7 @@ import pyarrow.parquet as pq
 
 import meds_reader._meds_reader as _meds_reader
 
-Patient = _meds_reader.Patient
+Subject = _meds_reader.Subject
 Event = _meds_reader.Event
 
 __doc__ = _meds_reader.__doc__
@@ -39,7 +39,7 @@ def meds_reader_verify():
 
     args = parser.parse_args()
 
-    database = PatientDatabase(args.meds_reader_database)
+    database = SubjectDatabase(args.meds_reader_database)
 
     random.seed(3452342)
 
@@ -48,9 +48,9 @@ def meds_reader_verify():
     file = random.choice(files)
     reference = pq.ParquetFile(file)
 
-    row_group = reference.read_row_group(random.randint(0, reference.num_row_groups - 1))
+    row_group = reference.read()
 
-    custom_fields = sorted(set(row_group.schema.names) - {"patient_id"})
+    custom_fields = sorted(set(row_group.schema.names) - {"subject_id"})
     all_properties = {k: row_group.schema.field(k).type for k in custom_fields}
 
     missing = set(all_properties) - set(database.properties)
@@ -63,20 +63,20 @@ def meds_reader_verify():
 
     python_objects = row_group.to_pylist()
 
-    patient_objects = collections.defaultdict(list)
+    subject_objects = collections.defaultdict(list)
 
     for obj in python_objects:
-        patient_id = obj["patient_id"]
-        del obj["patient_id"]
-        patient_objects[patient_id].append(obj)
+        subject_id = obj["subject_id"]
+        del obj["subject_id"]
+        subject_objects[subject_id].append(obj)
 
-    def assert_same(pyarrow_patient, reader_patient):
+    def assert_same(pyarrow_subject, reader_subject):
 
-        assert len(pyarrow_patient) == len(
-            reader_patient.events
-        ), f"{len(pyarrow_patient)} {len(reader_patient.events)}"
+        assert len(pyarrow_subject) == len(
+            reader_subject.events
+        ), f"{len(pyarrow_subject)} {len(reader_subject.events)}"
 
-        for pyarrow_event, reader_event in zip(pyarrow_patient, reader_patient.events):
+        for pyarrow_event, reader_event in zip(pyarrow_subject, reader_subject.events):
             for property in database.properties:
                 actual = getattr(reader_event, property)
                 if property in pyarrow_event:
@@ -85,14 +85,14 @@ def meds_reader_verify():
                     expected = pyarrow_event["properties"][property]
 
                 assert actual == expected, (
-                    f"Got {actual} expected {expected} for {reader_patient} {property}"
+                    f"Got {actual} expected {expected} for {reader_subject} {property}"
                     f" {pyarrow_event['time']} {reader_event.time}"
                 )
 
-    for patient_id, pyarrow_patient in patient_objects.items():
-        reader_patient = database[patient_id]
+    for subject_id, pyarrow_subject in subject_objects.items():
+        reader_subject = database[subject_id]
 
-        assert_same(pyarrow_patient, reader_patient)
+        assert_same(pyarrow_subject, reader_subject)
 
     print("Test passed!")
 
@@ -105,15 +105,15 @@ def meds_reader_convert():
                 os.execv(executible, sys.argv)
 
 
-def _row_generator(database: _meds_reader.PatientDatabase, data: pd.DataFrame):
+def _row_generator(database: _meds_reader.SubjectDatabase, data: pd.DataFrame):
     current_index = None
     current_rows: List[Any] = []
     for row in data.itertuples(index=False):
         if current_index is None:
-            current_index = int(row.patient_id)
-        if current_index is not None and current_index != int(row.patient_id):
+            current_index = int(row.subject_id)
+        if current_index is not None and current_index != int(row.subject_id):
             yield (database[current_index], current_rows)
-            current_rows, current_index = [row], int(row.patient_id)
+            current_rows, current_index = [row], int(row.subject_id)
         else:
             current_rows.append(row)
     if current_index is not None:
@@ -125,31 +125,31 @@ def _runner(
     input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]],
     result_queue: multiprocessing.SimpleQueue[Any],
 ) -> None:
-    database = _meds_reader.PatientDatabase(path_to_database)
+    database = _meds_reader.SubjectDatabase(path_to_database)
     while True:
         next_work = input_queue.get()
         if next_work is None:
             break
 
-        map_func_str, patient_ids = next_work
+        map_func_str, subject_ids = next_work
 
         map_func = pickle.loads(map_func_str)
         del map_func_str
 
-        if isinstance(patient_ids, pd.DataFrame):
-            result = map_func(_row_generator(database, patient_ids))
-        elif isinstance(patient_ids, np.ndarray):
-            result = map_func(database[int(patient_id)] for patient_id in patient_ids)
+        if isinstance(subject_ids, pd.DataFrame):
+            result = map_func(_row_generator(database, subject_ids))
+        elif isinstance(subject_ids, np.ndarray):
+            result = map_func(database[int(subject_id)] for subject_id in subject_ids)
         else:
             raise RuntimeError("Should only be given numpy arrays or data frames")
 
         result_queue.put(result)
 
 
-class _PatientDatabaseWrapper:
-    def __init__(self, db: PatientDatabase, patients_ids: np.ndarray):
+class _SubjectDatabaseWrapper:
+    def __init__(self, db: SubjectDatabase, subjects_ids: np.ndarray):
         self._db = db
-        self._selected_patients = patients_ids
+        self._selected_subjects = subjects_ids
         self.path_to_database = db.path_to_database
 
     @property
@@ -157,18 +157,18 @@ class _PatientDatabaseWrapper:
         return self._db.properties
 
     def __len__(self) -> int:
-        """The number of patients in the database"""
-        return len(self._selected_patients)
+        """The number of subjects in the database"""
+        return len(self._selected_subjects)
 
-    def __getitem__(self, patient_id: int) -> Any:
-        """Retrieve a single patient from the database"""
-        return self._db[patient_id]
+    def __getitem__(self, subject_id: int) -> Any:
+        """Retrieve a single subject from the database"""
+        return self._db[subject_id]
 
     def __iter__(self) -> Iterator[int]:
-        return iter(self._selected_patients)
+        return iter(self._selected_subjects)
 
-    def filter(self, patient_ids: Sequence[int]):
-        return cast(PatientDatabase, _PatientDatabaseWrapper(self._db, np.sort(patient_ids)))
+    def filter(self, subject_ids: Sequence[int]):
+        return cast(SubjectDatabase, _SubjectDatabaseWrapper(self._db, np.sort(subject_ids)))
 
     def map_with_data(
         self,
@@ -179,15 +179,15 @@ class _PatientDatabaseWrapper:
         return self._db.map_with_data(map_func, data, assume_sorted)
 
     def map(self, map_func: Callable[[Iterator[Any]], A]) -> Iterator[A]:
-        return self._db._map_fast(map_func, self._selected_patients)
+        return self._db._map_fast(map_func, self._selected_subjects)
 
 
-class PatientDatabase:
+class SubjectDatabase:
     def __init__(self, path_to_database: str, num_threads: int = 1) -> None:
         self.path_to_database = path_to_database
         self._num_threads = num_threads
-        self._database = _meds_reader.PatientDatabase(path_to_database)
-        self._all_patient_ids: np.ndarray = np.array(list(self._database))
+        self._database = _meds_reader.SubjectDatabase(path_to_database)
+        self._all_subject_ids: np.ndarray = np.array(list(self._database))
 
         if num_threads != 1:
             self._processes: Optional[List[SpawnProcess]] = []
@@ -214,22 +214,22 @@ class PatientDatabase:
         return self._database.properties
 
     def __len__(self) -> int:
-        """The number of patients in the database"""
+        """The number of subjects in the database"""
         return len(self._database)
 
-    def __getitem__(self, patient_id: int) -> Any:
-        """Retrieve a single patient from the database"""
-        return self._database[int(patient_id)]
+    def __getitem__(self, subject_id: int) -> Any:
+        """Retrieve a single subject from the database"""
+        return self._database[int(subject_id)]
 
     def __iter__(self) -> Iterator[int]:
-        """Get all patient ids in the database"""
-        return iter(self._all_patient_ids)
+        """Get all subject ids in the database"""
+        return iter(self._all_subject_ids)
 
-    def filter(self, patient_ids: Sequence[int]) -> PatientDatabase:
-        """Filter to a provided set of patient ids"""
+    def filter(self, subject_ids: Sequence[int]) -> SubjectDatabase:
+        """Filter to a provided set of subject ids"""
         return cast(
-            PatientDatabase,
-            _PatientDatabaseWrapper(self, np.sort(patient_ids)),
+            SubjectDatabase,
+            _SubjectDatabaseWrapper(self, np.sort(subject_ids)),
         )
 
     def map(
@@ -237,7 +237,7 @@ class PatientDatabase:
         map_func: Callable[[Iterator[Any]], A],
     ) -> Iterator[A]:
         """Apply the provided map function to the database"""
-        return self._map_fast(map_func, self._all_patient_ids)
+        return self._map_fast(map_func, self._all_subject_ids)
 
     def map_with_data(
         self,
@@ -247,16 +247,16 @@ class PatientDatabase:
     ) -> Iterator[A]:
         """Apply the provided map function to the database"""
 
-        assert "patient_id" in data.columns
+        assert "subject_id" in data.columns
 
         if not assume_sorted:
-            data = data.sort_values(by=["patient_id"])
+            data = data.sort_values(by=["subject_id"])
 
         if self._num_threads != 1:
             num_rows = data.shape[0]
             num_rows_per_shard = (num_rows + self._num_threads - 1) // self._num_threads
 
-            patient_ids = data["patient_id"]
+            subject_ids = data["subject_id"]
 
             map_func_p = pickle.dumps(map_func)
 
@@ -264,7 +264,7 @@ class PatientDatabase:
             last_index = 0
             for _ in range(self._num_threads):
                 next_index = min(num_rows, last_index + num_rows_per_shard)
-                while (next_index < num_rows) and (patient_ids[next_index - 1] == patient_ids[next_index]):
+                while (next_index < num_rows) and (subject_ids[next_index - 1] == subject_ids[next_index]):
                     next_index += 1
 
                 part = data.iloc[last_index:next_index]
@@ -280,19 +280,19 @@ class PatientDatabase:
         else:
             return iter((map_func(_row_generator(self._database, data)),))
 
-    def _map_fast(self, map_func: Callable[[Iterator[Any]], A], patient_ids: np.ndarray) -> Iterator[A]:
+    def _map_fast(self, map_func: Callable[[Iterator[Any]], A], subject_ids: np.ndarray) -> Iterator[A]:
         """Apply the provided map function to the database"""
         if self._num_threads != 1:
-            patients_per_part = np.array_split(patient_ids, self._num_threads)
+            subjects_per_part = np.array_split(subject_ids, self._num_threads)
 
             map_func_p = pickle.dumps(map_func)
 
-            for part in patients_per_part:
+            for part in subjects_per_part:
                 self._input_queue.put((map_func_p, part))
 
-            return (self._result_queue.get() for _ in patients_per_part)
+            return (self._result_queue.get() for _ in subjects_per_part)
         else:
-            return iter((map_func(self._database[int(patient_id)] for patient_id in patient_ids),))
+            return iter((map_func(self._database[int(subject_id)] for subject_id in subject_ids),))
 
     def terminate(self) -> None:
         """Close the pool"""
@@ -308,13 +308,13 @@ class PatientDatabase:
 
     def __del__(self):
         if self._num_threads != 1 and getattr(self, "_processes", None) is not None:
-            warnings.warn("PatientDatabase had a thread pool attached, but was never shut down")
+            warnings.warn("SubjectDatabase had a thread pool attached, but was never shut down")
 
-    def __enter__(self) -> PatientDatabase:
+    def __enter__(self) -> SubjectDatabase:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.terminate()
 
 
-__all__ = ["PatientDatabase", "Patient", "Event"]
+__all__ = ["SubjectDatabase", "Subject", "Event"]
