@@ -12,7 +12,7 @@ import random
 import sys
 import warnings
 from multiprocessing.context import SpawnProcess
-from typing import Any, Callable, Iterator, List, Optional, Sequence, Tuple, TypeVar, cast
+from typing import Any, Callable, Iterator, List, Optional, Sequence, Tuple, TypeVar, Union, cast
 
 import numpy as np
 import pandas as pd
@@ -27,7 +27,7 @@ __doc__ = _meds_reader.__doc__
 
 A = TypeVar("A")
 
-WorkEntry = Tuple[bytes, np.ndarray | pd.DataFrame]
+WorkEntry = Tuple[bytes, Union[np.ndarray, pd.DataFrame]]
 
 mp = multiprocessing.get_context("spawn")
 
