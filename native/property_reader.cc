@@ -172,8 +172,8 @@ struct StringPropertyReader : PropertyReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
-    void get_property_data(int32_t subject_offset,
-                                                   int32_t length, PyObject** result) {
+    void get_property_data(int32_t subject_offset, int32_t length,
+                           PyObject** result) {
         uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[subject_offset + 1] - offset;
@@ -304,8 +304,8 @@ struct TimePropertyReader : PropertyReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
-    void get_property_data(int32_t subject_offset,
-                                                   int32_t length, PyObject** result) {
+    void get_property_data(int32_t subject_offset, int32_t length,
+                           PyObject** result) {
         uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[subject_offset + 1] - offset;
@@ -458,8 +458,8 @@ struct PrimitivePropertyReader : PropertyReader {
 
     std::vector<char> decompressed;
 
-    void get_property_data(int32_t subject_offset,
-                                                   int32_t length, PyObject** result) {
+    void get_property_data(int32_t subject_offset, int32_t length,
+                           PyObject** result) {
         uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[subject_offset + 1] - offset;
@@ -607,7 +607,8 @@ struct NullMapReaderImpl : NullMapReader {
 
     std::vector<char> decompressed;
 
-    void get_null_map(int32_t subject_offset, int32_t length, uint64_t* result) {
+    void get_null_map(int32_t subject_offset, int32_t length,
+                      uint64_t* result) {
         uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[subject_offset + 1] - offset;

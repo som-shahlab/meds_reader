@@ -46,6 +46,8 @@
 
 namespace {
 
+constexpr bool USE_COMPRESSION = true;
+
 constexpr size_t COMPRESSION_BUFFER_SIZE =
     1 * 1000 * 1000;                                   // Roughly 1 megabyte
 constexpr size_t PIECE_SIZE = 1 * 1000 * 1000 * 1000;  // Roughly 1 gigabyte
@@ -927,6 +929,10 @@ void string_writer_thread(
             flush();
         }
     }
+
+    if (bytes_written != 0) {
+        flush();
+    }
 }
 
 std::vector<std::pair<uint64_t, std::string>> merger_thread(
@@ -1117,8 +1123,14 @@ void read_files(
     std::unique_ptr<ZSTD_CCtx, decltype(context_deleter)> context2{
         ZSTD_createCCtx(), context_deleter};
 
-    size_t res =
-        ZSTD_CCtx_setParameter(context2.get(), ZSTD_c_compressionLevel, 22);
+    size_t res;
+    if (USE_COMPRESSION) {
+        res =
+            ZSTD_CCtx_setParameter(context2.get(), ZSTD_c_compressionLevel, 22);
+    } else {
+        res =
+            ZSTD_CCtx_setParameter(context2.get(), ZSTD_c_compressionLevel, 1);
+    }
 
     if (ZSTD_isError(res)) {
         throw std::runtime_error("Could not set the compression level");
@@ -1182,30 +1194,33 @@ void process_generic_property(
                 estimated_size.fetch_add(res.second);
             });
 
-    std::vector<size_t> sample_sizes;
-    std::vector<char> sample_buffer;
-
     int num_shards = get_num_shards(num_threads, estimated_size);
     int num_subjects_per_shard = (num_subjects + num_shards - 1) / num_shards;
     int num_shards_per_thread = (num_shards + num_threads - 1) / num_threads;
 
-    for (const auto& samples : all_samples) {
-        for (const auto& sample : samples) {
-            sample_sizes.push_back(sample.size());
-            sample_buffer.insert(std::end(sample_buffer), std::begin(sample),
-                                 std::end(sample));
-        }
-    }
-
     size_t dictionary_size = 100 * 1000;  // 100 kilobytes
     std::vector<char> dictionary(dictionary_size);
+    size_t dict_size = 0;
 
-    size_t dict_size = ZDICT_trainFromBuffer(
-        dictionary.data(), dictionary.size(), sample_buffer.data(),
-        sample_sizes.data(), sample_sizes.size());
+    if (USE_COMPRESSION) {
+        std::vector<size_t> sample_sizes;
+        std::vector<char> sample_buffer;
 
-    if (ZDICT_isError(dict_size)) {
-        dict_size = 0;
+        for (const auto& samples : all_samples) {
+            for (const auto& sample : samples) {
+                sample_sizes.push_back(sample.size());
+                sample_buffer.insert(std::end(sample_buffer),
+                                     std::begin(sample), std::end(sample));
+            }
+        }
+
+        dict_size = ZDICT_trainFromBuffer(
+            dictionary.data(), dictionary.size(), sample_buffer.data(),
+            sample_sizes.data(), sample_sizes.size());
+
+        if (ZDICT_isError(dict_size)) {
+            dict_size = 0;
+        }
     }
 
     dictionary.resize(dict_size);
@@ -2146,8 +2161,14 @@ std::pair<size_t, std::vector<uint64_t>> write_null_map(
     std::unique_ptr<ZSTD_CCtx, decltype(context_deleter)> context2{
         ZSTD_createCCtx(), context_deleter};
 
-    size_t res =
-        ZSTD_CCtx_setParameter(context2.get(), ZSTD_c_compressionLevel, 22);
+    size_t res;
+    if (USE_COMPRESSION) {
+        res =
+            ZSTD_CCtx_setParameter(context2.get(), ZSTD_c_compressionLevel, 22);
+    } else {
+        res =
+            ZSTD_CCtx_setParameter(context2.get(), ZSTD_c_compressionLevel, 1);
+    }
 
     if (ZSTD_isError(res)) {
         throw std::runtime_error("Could not set the compression level");

@@ -24,7 +24,6 @@ namespace {
 struct Subject;
 struct SubjectDatabase;
 
-
 struct SubjectDatabaseIterator : public PyObject {
     static PyTypeObject Type;
 
@@ -66,9 +65,8 @@ struct SubjectDatabase : public PyObject,
     size_t get_num_properties();
     PyObject* get_property_name(size_t property_index);
     ssize_t get_property_index(PyObject* property_name);
-    void get_property_data(size_t index,
-                                                   int32_t subject_offset,
-                                                   int32_t length, PyObject** result);
+    void get_property_data(size_t index, int32_t subject_offset, int32_t length,
+                           PyObject** result);
     void get_null_map(int32_t subject_offset, int32_t length, uint64_t* result);
     int64_t get_subject_id(int32_t subject_offset) const;
     uint32_t get_subject_length(int32_t subject_offset) const;
@@ -164,7 +162,6 @@ struct SubjectEventsIterator : public PyObject {
     bool in_use;
 };
 
-
 PyTypeObject SubjectEventsIterator::Type = {
     .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
         "meds_reader.SubjectEventsIterator",
@@ -206,7 +203,8 @@ PyMappingMethods SubjectEventsMappingMethods = {
 };
 
 PyTypeObject SubjectEvents::Type = {
-    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name = "meds_reader.SubjectEvents",
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "meds_reader.SubjectEvents",
     .tp_basicsize = sizeof(SubjectEvents),
     .tp_itemsize = 0,
     .tp_dealloc = convert_to_cfunc<&SubjectEvents::dealloc>(),
@@ -220,7 +218,6 @@ PyTypeObject SubjectEvents::Type = {
     .tp_new = nullptr,
     .tp_free = nullptr,
 };
-
 
 struct EventPropertyIterator : public PyObject {
     static PyTypeObject Type;
@@ -262,7 +259,8 @@ struct Subject : public PyObject, fast_shared_ptr_object<Subject> {
 
     static Subject* create(SubjectDatabase* pd, size_t capacity);
 
-    void init(int32_t subject_offset, int32_t subject_length, PyObject* subject_id);
+    void init(int32_t subject_offset, int32_t subject_length,
+              PyObject* subject_id);
 
     SubjectDatabase* subject_database;
     const size_t capacity;
@@ -360,10 +358,7 @@ PyTypeObject Event::Type = {
     .tp_free = nullptr,
 };
 
-
-SubjectEventsIterator::SubjectEventsIterator() {
-    in_use = false;
-}
+SubjectEventsIterator::SubjectEventsIterator() { in_use = false; }
 
 void SubjectEventsIterator::init(SubjectEvents* e) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
@@ -409,7 +404,7 @@ void SubjectEvents::init(Subject* p, Event* e, int pl) {
     subject_length = pl;
     length_obj = nullptr;
 
-    for (int i =0 ; i < subject_length;i++) {
+    for (int i = 0; i < subject_length; i++) {
         events[i].init(subject);
     }
 }
@@ -435,9 +430,8 @@ inline PyObject* SubjectEvents::iter() {
 
 inline Py_ssize_t SubjectEvents::length() { return subject_length; }
 
-
 inline PyObject* SubjectEvents::subscript(PyObject* event_index) {
-    if ( PyLong_Check(event_index)) {
+    if (PyLong_Check(event_index)) {
         Py_ssize_t event_index_integer = PyLong_AsSsize_t(event_index);
 
         if (PyErr_Occurred()) {
@@ -449,8 +443,9 @@ inline PyObject* SubjectEvents::subscript(PyObject* event_index) {
         }
 
         if (event_index_integer < 0 || event_index_integer >= subject_length) {
-            return PyErr_Format(PyExc_IndexError,
-                                "Provided an out of bound index to SubjectEvents.__getitem__");
+            return PyErr_Format(
+                PyExc_IndexError,
+                "Provided an out of bound index to SubjectEvents.__getitem__");
         }
 
         PyObject* obj = static_cast<PyObject*>(events + event_index_integer);
@@ -462,7 +457,8 @@ inline PyObject* SubjectEvents::subscript(PyObject* event_index) {
     } else if (PySlice_Check(event_index)) {
         Py_ssize_t start, stop, step, slicelength;
 
-        int err = PySlice_GetIndicesEx(event_index, subject_length, &start, &stop, &step, &slicelength);
+        int err = PySlice_GetIndicesEx(event_index, subject_length, &start,
+                                       &stop, &step, &slicelength);
 
         if (err == -1) {
             return nullptr;
@@ -479,20 +475,20 @@ inline PyObject* SubjectEvents::subscript(PyObject* event_index) {
 
         return result;
     } else {
-        return PyErr_Format(PyExc_IndexError,
-                            "Provided a unknown index to SubjectEvents.__getitem__");
+        return PyErr_Format(
+            PyExc_IndexError,
+            "Provided a unknown index to SubjectEvents.__getitem__");
     }
 }
 
 void SubjectEvents::dealloc() {
-    for (int i =0 ; i < subject_length;i++) {
+    for (int i = 0; i < subject_length; i++) {
         Py_DECREF(static_cast<PyObject*>(events + i));
     }
     Py_XDECREF(length_obj);
 
     subject->decref();
 }
-
 
 PyObject* SubjectEvents::str() {
     static_assert(sizeof(int64_t) == sizeof(long));
@@ -514,7 +510,8 @@ PyObject* SubjectEvents::str() {
     return py_string;
 }
 
-std::tuple<size_t, size_t, size_t, size_t> align_and_size_subject(int32_t num_properties, int32_t capacity) {
+std::tuple<size_t, size_t, size_t, size_t> align_and_size_subject(
+    int32_t num_properties, int32_t capacity) {
     constexpr size_t event_alignment = alignof(Event);
     constexpr size_t null_map_alignment = alignof(uint64_t);
     constexpr size_t property_alignment = alignof(PyObject*);
@@ -543,7 +540,6 @@ std::tuple<size_t, size_t, size_t, size_t> align_and_size_subject(int32_t num_pr
 
     i += capacity * sizeof(uint64_t);
 
-
     // Now align
     extra_bytes = i % property_alignment;
     if (extra_bytes > 0) {
@@ -554,16 +550,13 @@ std::tuple<size_t, size_t, size_t, size_t> align_and_size_subject(int32_t num_pr
 
     i += num_properties * capacity * sizeof(PyObject*);
 
-
     size_t total_size = i;
-
 
     return {event_offset, null_map_offset, property_offset, total_size};
 }
 
 Subject::Subject(SubjectDatabase* pd, size_t c, char* data)
     : subject_database(pd), capacity(c), in_use(false) {
-
     auto info = align_and_size_subject(pd->get_num_properties(), capacity);
 
     static_assert(std::is_trivial<Event>::value);
@@ -596,7 +589,9 @@ PyObject* Subject::get_property(size_t index, Event* event_ptr) {
     size_t event_index = event_ptr - events;
 
     if (properties_initialized.test(index) == 0) {
-        subject_database->get_property_data(index, subject_offset, subject_length, saved_properties + capacity * index);
+        subject_database->get_property_data(
+            index, subject_offset, subject_length,
+            saved_properties + capacity * index);
         properties_initialized.set(index);
     }
 
@@ -614,7 +609,8 @@ uint64_t Subject::get_null_map(Event* event_ptr) {
     size_t event_index = event_ptr - events;
 
     if (!null_map_initialized) {
-        subject_database->get_null_map(subject_offset, subject_length, null_map);
+        subject_database->get_null_map(subject_offset, subject_length,
+                                       null_map);
         null_map_initialized = true;
     }
 
@@ -622,14 +618,15 @@ uint64_t Subject::get_null_map(Event* event_ptr) {
 }
 
 Subject* Subject::create(SubjectDatabase* pd, size_t capacity) {
-
     constexpr size_t property_alignment = alignof(PyObject*);
     constexpr size_t event_alignment = alignof(Event);
     constexpr size_t subject_alignment = alignof(Subject);
     constexpr size_t null_map_alignment = alignof(uint64_t);
 
-    size_t common_alignment = std::lcm(null_map_alignment, std::lcm(
-        property_alignment, std::lcm(event_alignment, subject_alignment)));
+    size_t common_alignment =
+        std::lcm(null_map_alignment,
+                 std::lcm(property_alignment,
+                          std::lcm(event_alignment, subject_alignment)));
 
     if (common_alignment > alignof(max_align_t)) {
         throw std::runtime_error("This should never happen");
@@ -637,12 +634,10 @@ Subject* Subject::create(SubjectDatabase* pd, size_t capacity) {
 
     auto info = align_and_size_subject(pd->get_num_properties(), capacity);
 
-    void* data =
-        calloc(1, std::get<3>(info));
+    void* data = calloc(1, std::get<3>(info));
     Subject* casted_data = new (data) Subject(pd, capacity, (char*)data);
     return casted_data;
 }
-
 
 void Subject::init(int32_t po, int32_t pl, PyObject* pid_object) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
@@ -676,12 +671,14 @@ inline PyObject* Subject::get_events(void*) {
 
 void Subject::dealloc() {
     if (!in_use) {
-        throw std::runtime_error("How can a subject not in use get deallocated?");
+        throw std::runtime_error(
+            "How can a subject not in use get deallocated?");
     }
     Py_DECREF(subject_id);
     Py_DECREF(static_cast<PyObject*>(&events_obj));
 
-    for (size_t p_index = 0; p_index < subject_database->get_num_properties(); p_index++) {
+    for (size_t p_index = 0; p_index < subject_database->get_num_properties();
+         p_index++) {
         if (!properties_initialized.test(p_index)) {
             continue;
         }
@@ -738,7 +735,8 @@ PyObject* Subject::create_event_property_iterator(Event* event) {
 
     event_property_iterators[desired_index].init(this, event);
 
-    return static_cast<PyObject*>(event_property_iterators.data() + desired_index);
+    return static_cast<PyObject*>(event_property_iterators.data() +
+                                  desired_index);
 }
 
 void Event::init(Subject* p) {
@@ -747,9 +745,7 @@ void Event::init(Subject* p) {
     subject->incref();
 }
 
-void Event::dealloc() {
-    subject->decref();
-}
+void Event::dealloc() { subject->decref(); }
 
 inline PyObject* Event::getattro(PyObject* key) {
     Py_INCREF(key);
@@ -759,7 +755,9 @@ inline PyObject* Event::getattro(PyObject* key) {
     return subject->get_property(key_wrapper.borrow(), this);
 }
 
-PyObject* Event::iter() { return subject->create_event_property_iterator(this); }
+PyObject* Event::iter() {
+    return subject->create_event_property_iterator(this);
+}
 
 PyObject* Event::str() {
     PyObjectWrapper time_str{PyUnicode_FromString("time")};
@@ -786,10 +784,7 @@ PyObject* Event::str() {
     return py_string;
 }
 
-EventPropertyIterator::EventPropertyIterator() {
-    in_use = false;
-}
-
+EventPropertyIterator::EventPropertyIterator() { in_use = false; }
 
 void EventPropertyIterator::init(Subject* pd, Event* e) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
@@ -803,7 +798,10 @@ void EventPropertyIterator::init(Subject* pd, Event* e) {
     current_index = subject->get_null_map(e);
 }
 
-void EventPropertyIterator::dealloc() { in_use = false; subject->decref(); }
+void EventPropertyIterator::dealloc() {
+    in_use = false;
+    subject->decref();
+}
 
 inline PyObject* EventPropertyIterator::next() {
     if (current_index == 0) {
@@ -914,7 +912,8 @@ SubjectDatabase::SubjectDatabase(std::string_view dir)
 SubjectDatabase::~SubjectDatabase() {
     for (Subject* subject : subjects) {
         if (subject->in_use) {
-            std::cerr << "Cannot delete database while still in use" << std::endl;
+            std::cerr << "Cannot delete database while still in use"
+                      << std::endl;
             abort();
         }
         delete subject;
@@ -932,17 +931,18 @@ ssize_t SubjectDatabase::get_property_index(PyObject* property_name) {
     return property_map->get_index(property_name);
 }
 
-void SubjectDatabase::get_property_data(
-    size_t index, int32_t subject_offset, int32_t length, PyObject** result) {
+void SubjectDatabase::get_property_data(size_t index, int32_t subject_offset,
+                                        int32_t length, PyObject** result) {
     if (property_accessors[index] == nullptr) {
         property_accessors[index] = create_property_reader(
             root_directory, properties[index].first, properties[index].second);
     }
-    property_accessors[index]->get_property_data(subject_offset, length, result);
+    property_accessors[index]->get_property_data(subject_offset, length,
+                                                 result);
 }
 
-void SubjectDatabase::get_null_map(int32_t subject_offset,
-                                                    int32_t length, uint64_t* result) {
+void SubjectDatabase::get_null_map(int32_t subject_offset, int32_t length,
+                                   uint64_t* result) {
     if (!null_map_reader) {
         null_map_reader =
             create_null_map_reader(root_directory, properties.size());
@@ -1052,7 +1052,8 @@ inline PyObject* SubjectDatabase::subscript(PyObject* subject_id) {
 
     if (subjects[index_to_use]->capacity < subject_length) {
         delete subjects[index_to_use];
-        subjects[index_to_use] = Subject::create(this, next_pow2(subject_length));
+        subjects[index_to_use] =
+            Subject::create(this, next_pow2(subject_length));
     }
 
     subjects[index_to_use]->init(*subject_offset, subject_length, subject_id);
@@ -1077,37 +1078,35 @@ PyObject* SubjectDatabase::str() {
     return py_string;
 }
 
-SubjectDatabaseIterator::SubjectDatabaseIterator() {
-    in_use = false;
-}
+SubjectDatabaseIterator::SubjectDatabaseIterator() { in_use = false; }
 
 void SubjectDatabaseIterator::init(SubjectDatabase* database) {
-        PyObject_Init(static_cast<PyObject*>(this), &Type);
+    PyObject_Init(static_cast<PyObject*>(this), &Type);
 
-        subject_database = database;
-        subject_database->incref();
-        index = 0;
-        in_use = true;
+    subject_database = database;
+    subject_database->incref();
+    index = 0;
+    in_use = true;
 }
 
-    void SubjectDatabaseIterator::dealloc() {
-        in_use = false;
-        subject_database->decref();
-    }
+void SubjectDatabaseIterator::dealloc() {
+    in_use = false;
+    subject_database->decref();
+}
 
 PyObject* SubjectDatabaseIterator::next() {
-     if (index >= subject_database->num_subjects) {
-            return PyErr_Format(PyExc_StopIteration,
+    if (index >= subject_database->num_subjects) {
+        return PyErr_Format(PyExc_StopIteration,
                             "Exceeded the size of the SubjectDatabase");
-        }
+    }
 
-        static_assert(sizeof(int64_t) == sizeof(long long));
+    static_assert(sizeof(int64_t) == sizeof(long long));
 
-        int64_t subject_id = subject_database->get_subject_id(index++);
+    int64_t subject_id = subject_database->get_subject_id(index++);
 
-        PyObject* result = PyLong_FromLongLong(subject_id);
+    PyObject* result = PyLong_FromLongLong(subject_id);
 
-        return result;
+    return result;
 }
 
 PyObject* SubjectDatabase::iter() {
