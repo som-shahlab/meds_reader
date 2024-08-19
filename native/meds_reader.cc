@@ -65,8 +65,9 @@ struct SubjectDatabase : public PyObject,
     size_t get_num_properties();
     PyObject* get_property_name(size_t property_index);
     ssize_t get_property_index(PyObject* property_name);
-    void get_property_data(size_t index, int32_t subject_offset, int32_t length,
-                           PyObject** result);
+    size_t get_property_data(size_t index, int32_t subject_offset,
+                             int32_t length, PyObject** result,
+                             PyObject** allocated);
     void get_null_map(int32_t subject_offset, int32_t length, uint64_t* result);
     int64_t get_subject_id(int32_t subject_offset) const;
     uint32_t get_subject_length(int32_t subject_offset) const;
@@ -277,6 +278,8 @@ struct Subject : public PyObject, fast_shared_ptr_object<Subject> {
     PyObject** saved_properties;
     std::bitset<64> properties_initialized;
 
+    size_t num_allocated;
+
     SubjectEvents events_obj;
 
     absl::InlinedVector<EventPropertyIterator, 4> event_property_iterators;
@@ -299,8 +302,10 @@ struct Subject : public PyObject, fast_shared_ptr_object<Subject> {
 
     Subject(SubjectDatabase* pd, size_t capacity, char* data);
 
-    PyObject* get_property(PyObject* property_name, Event* event_ptr);
-    PyObject* get_property(size_t property_index, Event* event_ptr);
+    __attribute__((always_inline)) PyObject* get_property(
+        PyObject* property_name, Event* event_ptr);
+    __attribute__((always_inline)) PyObject* get_property(size_t property_index,
+                                                          Event* event_ptr);
     uint64_t get_null_map(Event* event_ptr);
     PyObject* create_event_property_iterator(Event* event_ptr);
 };
@@ -548,7 +553,7 @@ std::tuple<size_t, size_t, size_t, size_t> align_and_size_subject(
 
     size_t property_offset = i;
 
-    i += num_properties * capacity * sizeof(PyObject*);
+    i += num_properties * capacity * sizeof(PyObject*) * 2;
 
     size_t total_size = i;
 
@@ -571,7 +576,8 @@ Subject::Subject(SubjectDatabase* pd, size_t c, char* data)
 
 Subject::~Subject() {}
 
-PyObject* Subject::get_property(PyObject* property_name, Event* event_ptr) {
+inline PyObject* Subject::get_property(PyObject* property_name,
+                                       Event* event_ptr) {
     // Needs to get the property
     ssize_t index = subject_database->get_property_index(property_name);
 
@@ -585,13 +591,16 @@ PyObject* Subject::get_property(PyObject* property_name, Event* event_ptr) {
     return get_property(index, event_ptr);
 };
 
-PyObject* Subject::get_property(size_t index, Event* event_ptr) {
+inline PyObject* Subject::get_property(size_t index, Event* event_ptr) {
     size_t event_index = event_ptr - events;
 
     if (properties_initialized.test(index) == 0) {
-        subject_database->get_property_data(
+        num_allocated += subject_database->get_property_data(
             index, subject_offset, subject_length,
-            saved_properties + capacity * index);
+            saved_properties + capacity * index,
+            saved_properties +
+                capacity * subject_database->get_num_properties() +
+                num_allocated);
         properties_initialized.set(index);
     }
 
@@ -655,6 +664,8 @@ void Subject::init(int32_t po, int32_t pl, PyObject* pid_object) {
     properties_initialized.reset();
     null_map_initialized = false;
 
+    num_allocated = 0;
+
     events_obj.init(this, events, subject_length);
 }
 
@@ -682,14 +693,14 @@ void Subject::dealloc() {
         if (!properties_initialized.test(p_index)) {
             continue;
         }
+        memset(saved_properties + p_index * capacity, 0,
+               subject_length * sizeof(PyObject*));
+    }
 
-        for (int32_t i = 0; i < subject_length; i++) {
-            PyObject*& obj = saved_properties[p_index * capacity + i];
-            if (obj != nullptr) {
-                Py_DECREF(obj);
-                obj = nullptr;
-            }
-        }
+    PyObject** to_remove =
+        saved_properties + subject_database->get_num_properties() * capacity;
+    for (size_t i = 0; i < num_allocated; i++) {
+        Py_DECREF(to_remove[i]);
     }
 
     decref();
@@ -931,14 +942,15 @@ ssize_t SubjectDatabase::get_property_index(PyObject* property_name) {
     return property_map->get_index(property_name);
 }
 
-void SubjectDatabase::get_property_data(size_t index, int32_t subject_offset,
-                                        int32_t length, PyObject** result) {
+size_t SubjectDatabase::get_property_data(size_t index, int32_t subject_offset,
+                                          int32_t length, PyObject** result,
+                                          PyObject** allocated) {
     if (property_accessors[index] == nullptr) {
         property_accessors[index] = create_property_reader(
             root_directory, properties[index].first, properties[index].second);
     }
-    property_accessors[index]->get_property_data(subject_offset, length,
-                                                 result);
+    return property_accessors[index]->get_property_data(subject_offset, length,
+                                                        result, allocated);
 }
 
 void SubjectDatabase::get_null_map(int32_t subject_offset, int32_t length,

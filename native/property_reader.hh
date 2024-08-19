@@ -12,9 +12,10 @@
 #include "pyutils.hh"
 
 struct PropertyReader {
-    virtual void get_property_data(
-        int32_t subject_offset, int32_t length, PyObject** result) = 0;
-    virtual ~PropertyReader(){};
+    virtual size_t get_property_data(int32_t subject_offset, int32_t length,
+                                     PyObject** result,
+                                     PyObject** to_deallocate) = 0;
+    virtual ~PropertyReader() {};
 };
 
 std::unique_ptr<PropertyReader> create_property_reader(
@@ -22,9 +23,9 @@ std::unique_ptr<PropertyReader> create_property_reader(
     const std::string& property_name, DataType property_type);
 
 struct NullMapReader {
-    virtual void get_null_map(int32_t subject_offset,
-                                               int32_t length, uint64_t* result) = 0;
-    virtual ~NullMapReader(){};
+    virtual void get_null_map(int32_t subject_offset, int32_t length,
+                              uint64_t* result) = 0;
+    virtual ~NullMapReader() {};
 };
 
 std::unique_ptr<NullMapReader> create_null_map_reader(

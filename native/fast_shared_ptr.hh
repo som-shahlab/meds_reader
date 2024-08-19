@@ -25,19 +25,15 @@ class fast_shared_ptr_object {
         }
     }
 
-    void incref() {
-        counter++;
-    }
+    void incref() { counter++; }
 
    protected:
     friend class fast_shared_ptr<T>;
 
-
-    void delete_self() {
-        delete static_cast<T*>(this);
-    }
+    void delete_self() { delete static_cast<T*>(this); }
 
     size_t counter;
+
    private:
 };
 

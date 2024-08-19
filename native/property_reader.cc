@@ -172,8 +172,10 @@ struct StringPropertyReader : PropertyReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
-    void get_property_data(int32_t subject_offset, int32_t length,
-                           PyObject** result) {
+    size_t get_property_data(int32_t subject_offset, int32_t length,
+                             PyObject** result, PyObject** allocated) {
+        size_t num_allocated = 0;
+
         uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[subject_offset + 1] - offset;
@@ -238,6 +240,9 @@ struct StringPropertyReader : PropertyReader {
             if (value_string == nullptr) {
                 throw std::runtime_error("Should never happen");
             }
+
+            allocated[num_allocated++] = value_string;
+
             dictionary[dictionary_size + i] = value_string;
             start_of_per_subject += values[value_index++];
         }
@@ -262,14 +267,14 @@ struct StringPropertyReader : PropertyReader {
                 null_byte >>= num_zeros;
 
                 result[current_result++] =
-                    dictionary[values[value_index++]].copy();
+                    dictionary[values[value_index++]].borrow();
             }
 
             result_index += sizeof(null_byte) * 8;
         }
 
         for (size_t i = dictionary_size; i < dictionary.size(); i++) {
-            dictionary[i] = nullptr;
+            dictionary[i].steal();
         }
 
         if (value_index > value_size) {
@@ -278,6 +283,8 @@ struct StringPropertyReader : PropertyReader {
                                      std::to_string(value_size) + " " +
                                      std::to_string(num_per_subject_values));
         }
+
+        return num_allocated;
     }
 };
 
@@ -304,8 +311,9 @@ struct TimePropertyReader : PropertyReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
-    void get_property_data(int32_t subject_offset, int32_t length,
-                           PyObject** result) {
+    size_t get_property_data(int32_t subject_offset, int32_t length,
+                             PyObject** result, PyObject** allocated) {
+        size_t num_allocated = 0;
         uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[subject_offset + 1] - offset;
@@ -371,17 +379,19 @@ struct TimePropertyReader : PropertyReader {
         size_t result_index = num_null;
 
         auto add_times = [&](uint32_t copies) {
-            PyObjectWrapper dt{PyDateTime_FromDateAndTime(
+            PyObject* dt{PyDateTime_FromDateAndTime(
                 day.year(), day.month(), day.day(), day.hour(), day.minute(),
                 day.second(), microseconds)};
-            if (dt.borrow() == nullptr) {
+            if (dt == nullptr) {
                 PyErr_Print();
                 throw std::runtime_error("Should never happen");
             }
             for (uint32_t i = 1; i < copies; i++) {
-                result[result_index++] = dt.copy();
+                result[result_index++] = dt;
             }
-            result[result_index++] = dt.steal();
+            result[result_index++] = dt;
+
+            allocated[num_allocated++] = dt;
         };
 
         size_t value_index = 1;
@@ -428,6 +438,8 @@ struct TimePropertyReader : PropertyReader {
         if (value_index > values.size()) {
             throw std::runtime_error("Out of bounds error for values");
         }
+
+        return num_allocated;
     }
 };
 
@@ -458,8 +470,10 @@ struct PrimitivePropertyReader : PropertyReader {
 
     std::vector<char> decompressed;
 
-    void get_property_data(int32_t subject_offset, int32_t length,
-                           PyObject** result) {
+    size_t get_property_data(int32_t subject_offset, int32_t length,
+                             PyObject** result, PyObject** allocated) {
+        size_t num_allocated = 0;
+
         uint64_t offset = data_file.data<uint64_t>()[subject_offset];
         uint64_t num_bytes =
             data_file.data<uint64_t>()[subject_offset + 1] - offset;
@@ -504,7 +518,10 @@ struct PrimitivePropertyReader : PropertyReader {
                 null_byte >>= 1;
                 null_byte >>= num_zeros;
 
-                result[current_result++] = transform_func(*data++);
+                PyObject* obj = transform_func(*data++);
+
+                result[current_result++] = obj;
+                allocated[num_allocated++] = obj;
             }
 
             result_index += sizeof(null_byte) * 8;
@@ -517,6 +534,8 @@ struct PrimitivePropertyReader : PropertyReader {
         if (result_index % 32 > (size_t)length % 32) {
             throw std::runtime_error("Had more results than the length?");
         }
+
+        return num_allocated;
     }
 };
 
