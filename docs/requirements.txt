@@ -2,4 +2,4 @@ sphinx==7.3.7
 furo==2024.5.6
 meds==0.3.2
 myst-parser==3.0.1
-pandas=2.2
+pandas==2.2
