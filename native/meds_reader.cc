@@ -702,7 +702,8 @@ void Subject::delete_self() {
     }
 
     PyObject** to_remove =
-        saved_properties + subject_database->get_num_properties() * subject_length;
+        saved_properties +
+        subject_database->get_num_properties() * subject_length;
     for (size_t i = 0; i < num_allocated; i++) {
         Py_DECREF(to_remove[i]);
     }
