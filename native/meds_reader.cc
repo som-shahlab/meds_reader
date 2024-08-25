@@ -597,14 +597,14 @@ inline PyObject* Subject::get_property(size_t index, Event* event_ptr) {
     if (properties_initialized.test(index) == 0) {
         num_allocated += subject_database->get_property_data(
             index, subject_offset, subject_length,
-            saved_properties + capacity * index,
+            saved_properties + subject_length * index,
             saved_properties +
-                capacity * subject_database->get_num_properties() +
+                subject_length * subject_database->get_num_properties() +
                 num_allocated);
         properties_initialized.set(index);
     }
 
-    PyObject* res = saved_properties[capacity * index + event_index];
+    PyObject* res = saved_properties[subject_length * index + event_index];
 
     if (res == nullptr) {
         Py_RETURN_NONE;
@@ -688,25 +688,25 @@ void Subject::dealloc() {
     Py_DECREF(subject_id);
     Py_DECREF(static_cast<PyObject*>(&events_obj));
 
+    decref();
+}
+
+void Subject::delete_self() {
     for (size_t p_index = 0; p_index < subject_database->get_num_properties();
          p_index++) {
         if (!properties_initialized.test(p_index)) {
             continue;
         }
-        memset(saved_properties + p_index * capacity, 0,
+        memset(saved_properties + p_index * subject_length, 0,
                subject_length * sizeof(PyObject*));
     }
 
     PyObject** to_remove =
-        saved_properties + subject_database->get_num_properties() * capacity;
+        saved_properties + subject_database->get_num_properties() * subject_length;
     for (size_t i = 0; i < num_allocated; i++) {
         Py_DECREF(to_remove[i]);
     }
 
-    decref();
-}
-
-void Subject::delete_self() {
     in_use = false;
     subject_database->decref();
 }
