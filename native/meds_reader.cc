@@ -708,6 +708,8 @@ void Subject::delete_self() {
         Py_DECREF(to_remove[i]);
     }
 
+    memset(to_remove, 0, num_allocated * sizeof(PyObject*));
+
     in_use = false;
     subject_database->decref();
 }
