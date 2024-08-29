@@ -105,6 +105,14 @@ def meds_reader_convert():
                 os.execv(executible, sys.argv)
 
 
+def meds_reader_filter():
+    submodules = importlib.resources.files("meds_reader")
+    for module in submodules.iterdir():
+        if module.name.startswith("meds_reader_filter"):
+            with importlib.resources.as_file(module) as executible:
+                os.execv(executible, sys.argv)
+
+
 def _row_generator(database: _meds_reader.SubjectDatabase, data: pd.DataFrame):
     current_index = None
     current_rows: List[Any] = []

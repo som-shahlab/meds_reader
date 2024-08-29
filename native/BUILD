@@ -27,6 +27,16 @@ cc_library(
 )
 
 cc_library(
+    name="filter_database",
+    srcs=["filter_database.cc", "pdqsort.h"],
+    hdrs=["filter_database.hh"],
+    deps=[
+        ":mmap_file",
+    ],
+)
+
+
+cc_library(
     name="binary_version",
     hdrs=["binary_version.hh"],
 )
@@ -80,6 +90,15 @@ cc_binary(
     srcs=["meds_reader_convert.cc"],
     deps=[
         ":create_database",
+        "@CLI11//:cli11",
+    ],
+)
+
+cc_binary(
+    name="meds_reader_filter",
+    srcs=["meds_reader_filter.cc"],
+    deps=[
+        ":filter_database",
         "@CLI11//:cli11",
     ],
 )

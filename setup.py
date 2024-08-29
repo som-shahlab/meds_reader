@@ -119,6 +119,7 @@ setuptools.setup(
     ext_modules=[
         BazelExtension("meds_reader._meds_reader", "_meds_reader.so", "native"),
         BazelExtension("meds_reader.meds_reader_convert", "meds_reader_convert", "native"),
+        BazelExtension("meds_reader.meds_reader_filter", "meds_reader_filter", "native"),
     ],
     cmdclass={"build_ext": cmake_build_ext},
     zip_safe=False,

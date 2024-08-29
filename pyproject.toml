@@ -26,6 +26,7 @@ Tracker = "https://github.com/som-shahlab/meds_reader/issues"
 
 [project.scripts]
 meds_reader_convert = "meds_reader:meds_reader_convert"
+meds_reader_filter = "meds_reader:meds_reader_filter"
 meds_reader_verify = "meds_reader:meds_reader_verify"
 
 [tool.isort]
