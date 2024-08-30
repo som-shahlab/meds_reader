@@ -79,11 +79,8 @@ def meds_reader_verify():
         for pyarrow_event, reader_event in zip(pyarrow_subject, reader_subject.events):
             for property in database.properties:
                 actual = getattr(reader_event, property)
-                if property in pyarrow_event:
-                    expected = pyarrow_event[property]
-                else:
-                    expected = pyarrow_event["properties"][property]
-
+                expected = pyarrow_event[property]
+                
                 assert actual == expected, (
                     f"Got {actual} expected {expected} for {reader_subject} {property}"
                     f" {pyarrow_event['time']} {reader_event.time}"
