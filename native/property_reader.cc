@@ -709,16 +709,16 @@ std::unique_ptr<PropertyReader> create_property_reader(
 
             static_assert(sizeof(uint64_t) == sizeof(unsigned long));
         case DataType::UINT8:
-            return make_primitive_reader<int8_t>(property_path,
+            return make_primitive_reader<uint8_t>(property_path,
                                                  PyLong_FromUnsignedLong);
         case DataType::UINT16:
-            return make_primitive_reader<int16_t>(property_path,
+            return make_primitive_reader<uint16_t>(property_path,
                                                   PyLong_FromUnsignedLong);
         case DataType::UINT32:
-            return make_primitive_reader<int32_t>(property_path,
+            return make_primitive_reader<uint32_t>(property_path,
                                                   PyLong_FromUnsignedLong);
         case DataType::UINT64:
-            return make_primitive_reader<int64_t>(property_path,
+            return make_primitive_reader<uint64_t>(property_path,
                                                   PyLong_FromUnsignedLong);
     }
 
