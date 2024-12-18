@@ -1825,7 +1825,7 @@ std::vector<std::pair<int64_t, uint32_t>> get_subject_ids(
         auto chunked_subject_id = table->GetColumnByName("subject_id");
 
         if (chunked_subject_id == nullptr) {
-            throw std::runtime_error("Could not get column");
+            throw std::runtime_error("Could not get subject_id column, please double check that this is a MEDS 0.3.3 dataset");
         }
 
         for (const auto& subject_id_chunk : chunked_subject_id->chunks()) {
