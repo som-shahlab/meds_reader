@@ -4,6 +4,8 @@ import datetime
 import json
 import os
 import subprocess
+import sys
+import time
 
 import meds
 import pandas as pd
@@ -15,6 +17,12 @@ import meds_reader
 import meds_reader.transform
 
 metadata = {"dataset_name": "Testing Dataset!"}
+
+def sleep_on_windows():
+    if sys.platform == 'win32':
+        # Windows has file consistency bugs/ issues
+        # Need a sleep here
+        time.sleep(5)
 
 
 @pytest.fixture
@@ -83,7 +91,6 @@ def meds_dataset(tmpdir: str):
     pq.write_table(table, os.path.join(data_dir, "entries.parquet"))
     return os.path.join(tmpdir, "meds")
 
-
 @pytest.fixture
 def subject_database(tmpdir: str, meds_dataset: str):
 
@@ -93,6 +100,8 @@ def subject_database(tmpdir: str, meds_dataset: str):
         ["meds_reader_convert", meds_dataset, meds_reader_dir, "--num_threads", "4"],
         check=True,
     )
+
+    sleep_on_windows()
 
     return meds_reader.SubjectDatabase(str(meds_reader_dir))
 
@@ -107,6 +116,8 @@ def threaded_subject_database(tmpdir: str, meds_dataset: str):
         check=True,
     )
 
+    sleep_on_windows()
+    
     return meds_reader.SubjectDatabase(str(meds_reader_dir), num_threads=4)
 
 
@@ -231,6 +242,7 @@ def test_lookup(subject_database):
 
 
 def test_filter(subject_database):
+    print(subject_database.path_to_database)
     sub_database = subject_database.filter([32])
 
     assert len(sub_database) == 1
@@ -277,6 +289,8 @@ def test_transform(tmpdir: str, meds_dataset: str):
         ["meds_reader_convert", target, meds_reader_dir, "--num_threads", "4"],
         check=True,
     )
+    
+    sleep_on_windows()
 
     database = meds_reader.SubjectDatabase(str(meds_reader_dir))
 

@@ -2,11 +2,6 @@
 
 #define ZSTD_STATIC_LINKING_ONLY
 
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <bitset>
 #include <condition_variable>
 #include <filesystem>
@@ -52,7 +47,7 @@ constexpr size_t COMPRESSION_BUFFER_SIZE =
     1 * 1000 * 1000;                                   // Roughly 1 megabyte
 constexpr size_t PIECE_SIZE = 1 * 1000 * 1000 * 1000;  // Roughly 1 gigabyte
 constexpr int QUEUE_SIZE = 1000;
-constexpr ssize_t SEMAPHORE_BLOCK_SIZE = 100;
+constexpr int64_t SEMAPHORE_BLOCK_SIZE = 100;
 
 template <typename T>
 void add_literal_to_vector(std::vector<char>& data, T to_add) {
@@ -248,7 +243,7 @@ struct CappedQueueSender {
     }
 
     CappedQueue<T>& queue;
-    ssize_t slots_to_write;
+    int64_t slots_to_write;
     int num_threads;
 };
 
@@ -336,7 +331,7 @@ void sort_concatenate_shards(int i, const std::filesystem::path& root_path,
 
         if (!std::filesystem::exists(shard_path)) {
             throw std::runtime_error("Missing shard? " +
-                                     std::string(shard_path));
+                                     shard_path.string());
         }
 
         {
@@ -344,9 +339,9 @@ void sort_concatenate_shards(int i, const std::filesystem::path& root_path,
 
             std::vector<std::pair<uint32_t, std::string_view>> entries;
 
-            const char* pointer = shard_file.bytes().begin();
+            const char* pointer = shard_file.bytes().data();
 
-            while (pointer != shard_file.bytes().end()) {
+            while (pointer != shard_file.bytes().data() + shard_file.bytes().size()) {
                 const uint32_t* header = (const uint32_t*)pointer;
                 uint32_t offset = header[0];
                 uint32_t size = header[1];
@@ -561,7 +556,7 @@ void iterate_strings_helper(
     arrow_reader_props.set_batch_size(128 * 1024);  // default 64 * 1024
 
     parquet::arrow::FileReaderBuilder reader_builder;
-    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename, /*memory_map=*/false,
+    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename.string(), /*memory_map=*/false,
                                                  reader_properties));
     reader_builder.memory_pool(pool);
     reader_builder.properties(arrow_reader_props);
@@ -771,7 +766,7 @@ void string_reader_thread_helper(
     arrow_reader_props.set_batch_size(128 * 1024);  // default 64 * 1024
 
     parquet::arrow::FileReaderBuilder reader_builder;
-    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename, /*memory_map=*/false,
+    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename.string(), /*memory_map=*/false,
                                                  reader_properties));
     reader_builder.memory_pool(pool);
     reader_builder.properties(arrow_reader_props);
@@ -894,7 +889,7 @@ void string_writer_thread(
 
         pdqsort(std::begin(vector), std::end(vector));
 
-        ZstdRowWriter writer(folder_to_write_to / std::to_string(next_index),
+        ZstdRowWriter writer((folder_to_write_to / std::to_string(next_index)).string(),
                              context.get());
         next_index++;
 
@@ -1229,6 +1224,7 @@ void process_generic_property(
         std::ofstream zdict(
             string_path / std::string("zdict"),
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+        zdict.exceptions(std::ofstream::badbit | std::ofstream::failbit);
         zdict.write(dictionary.data(), dictionary.size());
     }
 
@@ -1405,7 +1401,7 @@ void iterate_primitive(
     arrow_reader_props.set_batch_size(128 * 1024);  // default 64 * 1024
 
     parquet::arrow::FileReaderBuilder reader_builder;
-    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename, /*memory_map=*/false,
+    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename.string(), /*memory_map=*/false,
                                                  reader_properties));
     reader_builder.memory_pool(pool);
     reader_builder.properties(arrow_reader_props);
@@ -1574,7 +1570,7 @@ void iterate_time(
     arrow_reader_props.set_batch_size(128 * 1024);  // default 64 * 1024
 
     parquet::arrow::FileReaderBuilder reader_builder;
-    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename, /*memory_map=*/false,
+    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename.string(), /*memory_map=*/false,
                                                  reader_properties));
     reader_builder.memory_pool(pool);
     reader_builder.properties(arrow_reader_props);
@@ -1779,7 +1775,7 @@ std::vector<std::pair<int64_t, uint32_t>> get_subject_ids(
     arrow_reader_props.set_batch_size(128 * 1024);  // default 64 * 1024
 
     parquet::arrow::FileReaderBuilder reader_builder;
-    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename, /*memory_map=*/false,
+    PARQUET_THROW_NOT_OK(reader_builder.OpenFile(filename.string(), /*memory_map=*/false,
                                                  reader_properties));
     reader_builder.memory_pool(pool);
     reader_builder.properties(arrow_reader_props);
@@ -2324,7 +2320,7 @@ void process_null_map(
 
     for (int i = 0; i < num_threads; i++) {
         auto& item = all_lengths[i];
-        ssize_t num_to_write = item.second.size() * sizeof(uint64_t);
+        int64_t num_to_write = item.second.size() * sizeof(uint64_t);
         const char* buffer = (const char*)item.second.data();
         data_file.write(buffer, num_to_write);
     }
@@ -2421,6 +2417,8 @@ void create_database(const char* source, const char* destination,
         std::ofstream subject_ids_file(
             destination_path / "subject_id",
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+        
+        subject_ids_file.exceptions ( std::ifstream::failbit | std::ifstream::badbit );
 
         subject_ids_file.write((const char*)flat_subject_ids.data(),
                                sizeof(int64_t) * flat_subject_ids.size());

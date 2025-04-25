@@ -6,6 +6,7 @@
 #include <datetime.h>
 
 #include <fstream>
+#include <bit>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
@@ -18,6 +19,13 @@
 #include "perfect_hash.hh"
 #include "property_reader.hh"
 #include "pyutils.hh"
+
+
+#ifdef _MSC_VER
+#define FORCE_INLINE __forceinline
+#else
+#define FORCE_INLINE inline __attribute__((always_inline))
+#endif
 
 namespace {
 
@@ -64,7 +72,7 @@ struct SubjectDatabase : public PyObject,
 
     size_t get_num_properties();
     PyObject* get_property_name(size_t property_index);
-    ssize_t get_property_index(PyObject* property_name);
+    int64_t get_property_index(PyObject* property_name);
     size_t get_property_data(size_t index, int32_t subject_offset,
                              int32_t length, PyObject** result,
                              PyObject** allocated);
@@ -79,7 +87,7 @@ struct SubjectDatabase : public PyObject,
 
     PyObject* get_properties(void*);
     Py_ssize_t length();
-    __attribute__((always_inline)) PyObject* subscript(PyObject* subject_id);
+    FORCE_INLINE PyObject* subscript(PyObject* subject_id);
     PyObject* reduce(PyObject* Py_UNUSED(unused));
 
     PyObject* str();
@@ -152,7 +160,7 @@ struct SubjectEventsIterator : public PyObject {
     // Python methods
     //-----------------------------------------
     void dealloc();
-    __attribute__((always_inline)) PyObject* next();
+    FORCE_INLINE PyObject* next();
     PyObject* iter();
     //-----------------------------------------
 
@@ -186,9 +194,9 @@ struct SubjectEvents : public PyObject {
     //-----------------------------------------
     PyObject* str();
     void dealloc();
-    __attribute__((always_inline)) PyObject* subscript(PyObject*);
-    __attribute__((always_inline)) Py_ssize_t length();
-    __attribute__((always_inline)) PyObject* iter();
+    FORCE_INLINE PyObject* subscript(PyObject*);
+    FORCE_INLINE Py_ssize_t length();
+    FORCE_INLINE PyObject* iter();
     //-----------------------------------------
 
     Subject* subject;
@@ -234,7 +242,7 @@ struct EventPropertyIterator : public PyObject {
     // Python methods
     //-----------------------------------------
     void dealloc();
-    __attribute__((always_inline)) PyObject* next();
+    FORCE_INLINE PyObject* next();
     PyObject* iter();
     //-----------------------------------------
 };
@@ -288,8 +296,8 @@ struct Subject : public PyObject, fast_shared_ptr_object<Subject> {
     //-----------------------------------------
     PyObject* str();
     void dealloc();
-    __attribute__((always_inline)) PyObject* get_subject_id(void*);
-    __attribute__((always_inline)) PyObject* get_events(void*);
+    FORCE_INLINE PyObject* get_subject_id(void*);
+    FORCE_INLINE PyObject* get_events(void*);
     //-----------------------------------------
 
     void delete_self();
@@ -302,9 +310,9 @@ struct Subject : public PyObject, fast_shared_ptr_object<Subject> {
 
     Subject(SubjectDatabase* pd, size_t capacity, char* data);
 
-    __attribute__((always_inline)) PyObject* get_property(
+    FORCE_INLINE PyObject* get_property(
         PyObject* property_name, Event* event_ptr);
-    __attribute__((always_inline)) PyObject* get_property(size_t property_index,
+        FORCE_INLINE PyObject* get_property(size_t property_index,
                                                           Event* event_ptr);
     uint64_t get_null_map(Event* event_ptr);
     PyObject* create_event_property_iterator(Event* event_ptr);
@@ -342,7 +350,7 @@ struct Event : public PyObject {
     //-----------------------------------------
     void dealloc();
     PyObject* str();
-    __attribute__((always_inline)) PyObject* getattro(PyObject* key);
+    FORCE_INLINE PyObject* getattro(PyObject* key);
     PyObject* iter();
     //-----------------------------------------
 };
@@ -496,8 +504,7 @@ void SubjectEvents::dealloc() {
 }
 
 PyObject* SubjectEvents::str() {
-    static_assert(sizeof(int64_t) == sizeof(long));
-    int64_t subject_id_val = PyLong_AsLong(subject->subject_id);
+    int64_t subject_id_val = PyLong_AsLongLong(subject->subject_id);
 
     std::string debug_string =
         absl::StrCat("Events(subject_id=", subject_id_val,
@@ -528,7 +535,7 @@ std::tuple<size_t, size_t, size_t, size_t> align_and_size_subject(
     // Now align
     size_t extra_bytes = i % event_alignment;
     if (extra_bytes > 0) {
-        i += ((ssize_t)event_alignment - (ssize_t)extra_bytes);
+        i += ((int64_t)event_alignment - (int64_t)extra_bytes);
     }
 
     size_t event_offset = i;
@@ -538,7 +545,7 @@ std::tuple<size_t, size_t, size_t, size_t> align_and_size_subject(
     // Now align
     extra_bytes = i % null_map_alignment;
     if (extra_bytes > 0) {
-        i += ((ssize_t)null_map_alignment - (ssize_t)extra_bytes);
+        i += ((int64_t)null_map_alignment - (int64_t)extra_bytes);
     }
 
     size_t null_map_offset = i;
@@ -548,7 +555,7 @@ std::tuple<size_t, size_t, size_t, size_t> align_and_size_subject(
     // Now align
     extra_bytes = i % property_alignment;
     if (extra_bytes > 0) {
-        i += ((ssize_t)property_alignment - (ssize_t)extra_bytes);
+        i += ((int64_t)property_alignment - (int64_t)extra_bytes);
     }
 
     size_t property_offset = i;
@@ -579,7 +586,7 @@ Subject::~Subject() {}
 inline PyObject* Subject::get_property(PyObject* property_name,
                                        Event* event_ptr) {
     // Needs to get the property
-    ssize_t index = subject_database->get_property_index(property_name);
+    int64_t index = subject_database->get_property_index(property_name);
 
     if (index == -1) [[unlikely]] {
         // Does not contain
@@ -715,8 +722,7 @@ void Subject::delete_self() {
 }
 
 PyObject* Subject::str() {
-    static_assert(sizeof(int64_t) == sizeof(long));
-    int64_t subject_id_val = PyLong_AsLong(subject_id);
+    int64_t subject_id_val = PyLong_AsLongLong(subject_id);
 
     std::string debug_string =
         absl::StrCat("Subject(subject_id=", subject_id_val,
@@ -822,8 +828,7 @@ inline PyObject* EventPropertyIterator::next() {
         return PyErr_Format(PyExc_StopIteration,
                             "Exceeded the number of properties in events");
     } else {
-        static_assert(sizeof(uint64_t) == sizeof(unsigned long));
-        int num_zeros = __builtin_ctzl(current_index);
+        int num_zeros = std::countr_zero(current_index);
         uint64_t mask = 1;
         mask <<= (uint64_t)num_zeros;
         current_index &= ~mask;
@@ -940,7 +945,7 @@ PyObject* SubjectDatabase::get_property_name(size_t property_name_index) {
     return property_names[property_name_index].copy();
 }
 
-ssize_t SubjectDatabase::get_property_index(PyObject* property_name) {
+int64_t SubjectDatabase::get_property_index(PyObject* property_name) {
     PyUnicode_InternInPlace(&property_name);
     return property_map->get_index(property_name);
 }
@@ -1035,8 +1040,7 @@ inline PyObject* SubjectDatabase::subscript(PyObject* subject_id) {
             "SubjectDatabase only supports integer subject_ids");
     }
 
-    static_assert(sizeof(long) == sizeof(int64_t));
-    int64_t int_subject_id = PyLong_AsLong(subject_id);
+    int64_t int_subject_id = PyLong_AsLongLong(subject_id);
 
     if (PyErr_Occurred()) {
         return nullptr;
@@ -1143,7 +1147,7 @@ PyObject* SubjectDatabase::iter() {
 }
 
 struct PyModuleDef meds_reader_module = {
-    PyModuleDef_HEAD_INIT,
+    .m_base = PyModuleDef_HEAD_INIT,
     .m_name = "meds_reader",
 };
 

@@ -8,7 +8,6 @@ int main(int argc, char** argv) {
         "meds_reader_filter is a program for converting a MEDS dataset to a "
         "meds_reader SubjectDatabase.",
         "meds_reader_convert"};
-    argv = app.ensure_utf8(argv);
 
     std::string source_dataset, destination_database, subject_ids_file;
     app.add_option("source_dataset", source_dataset,

@@ -6,9 +6,9 @@
 #include <datetime.h>
 #include <fcntl.h>
 #include <structmember.h>
-#include <sys/mman.h>
+// #include <sys/mman.h>
 #include <sys/stat.h>
-#include <unistd.h>
+// #include <unistd.h>
 
 #include <bitset>
 #include <filesystem>
@@ -16,6 +16,7 @@
 #include <iostream>
 #include <optional>
 #include <vector>
+#include <bit>
 
 #include "absl/time/civil_time.h"
 #include "absl/types/span.h"
@@ -132,7 +133,7 @@ struct StringPropertyReader : PropertyReader {
           data_file(property_path / "data"),
           context(ZSTD_createDCtx(), context_deleter) {
         {
-            ZstdRowReader reader(property_path / "dictionary", context.get());
+            ZstdRowReader reader((property_path / "dictionary").string(), context.get());
 
             while (true) {
                 auto next = reader.get_next();
@@ -259,8 +260,8 @@ struct StringPropertyReader : PropertyReader {
         for (uint64_t null_byte : null_bytes) {
             size_t current_result = result_index;
             while (null_byte != 0) {
-                static_assert(sizeof(uint64_t) == sizeof(unsigned long));
-                int num_zeros = __builtin_ctzl(null_byte);
+                static_assert(sizeof(uint64_t) == sizeof(unsigned long long));
+                int num_zeros = std::countr_zero(null_byte);
                 current_result += num_zeros;
 
                 null_byte >>= 1;
@@ -511,8 +512,7 @@ struct PrimitivePropertyReader : PropertyReader {
         for (uint64_t null_byte : null_bytes) {
             size_t current_result = result_index;
             while (null_byte != 0) {
-                static_assert(sizeof(uint64_t) == sizeof(unsigned long));
-                int num_zeros = __builtin_ctzl(null_byte);
+                int num_zeros = std::countr_zero(null_byte);
                 current_result += num_zeros;
 
                 null_byte >>= 1;
@@ -692,7 +692,6 @@ std::unique_ptr<PropertyReader> create_property_reader(
             return make_primitive_reader<double>(property_path,
                                                  PyFloat_FromDouble);
 
-            static_assert(sizeof(int64_t) == sizeof(long));
 
         case DataType::INT8:
             return make_primitive_reader<int8_t>(property_path,
@@ -705,9 +704,8 @@ std::unique_ptr<PropertyReader> create_property_reader(
                                                   PyLong_FromLong);
         case DataType::INT64:
             return make_primitive_reader<int64_t>(property_path,
-                                                  PyLong_FromLong);
+                                                  PyLong_FromLongLong);
 
-            static_assert(sizeof(uint64_t) == sizeof(unsigned long));
         case DataType::UINT8:
             return make_primitive_reader<uint8_t>(property_path,
                                                  PyLong_FromUnsignedLong);
@@ -719,7 +717,7 @@ std::unique_ptr<PropertyReader> create_property_reader(
                                                   PyLong_FromUnsignedLong);
         case DataType::UINT64:
             return make_primitive_reader<uint64_t>(property_path,
-                                                  PyLong_FromUnsignedLong);
+                                                  PyLong_FromUnsignedLongLong);
     }
 
     throw std::runtime_error(

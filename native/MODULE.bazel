@@ -4,3 +4,85 @@
 #
 # For more details, please check https://github.com/bazelbuild/bazel/issues/18958
 ###############################################################################
+
+bazel_dep(name="pybind11_bazel", version = "2.13.6")
+bazel_dep(name="rules_foreign_cc", version = "0.14.0")
+bazel_dep(name="rules_python", version = "1.4.0-rc2")
+bazel_dep(name="platforms", version = "0.0.11")
+bazel_dep(name = "abseil-cpp", version = "20250127.1")
+bazel_dep(name = "zstd", version = "1.5.7")
+bazel_dep(name = "boost.iostreams", version = "1.87.0")
+bazel_dep(name = "cli11", version = "2.5.0")
+
+#local_path_override(module_name="rules_python", path="C:\\Users\\ethan\\OneDrive\\Documents\\GitHub\\rules_python")
+git_override(module_name="rules_python", remote="https://github.com/EthanSteinberg/rules_python", commit="2b557301f67beff45fc672f88959c0338bf65ea0")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
+
+
+all_content = """filegroup(name = "all", srcs = glob(["**"]), visibility = ["//visibility:public"])"""
+
+http_archive(
+    name = "streamvbyte",
+    url = "https://github.com/lemire/streamvbyte/archive/refs/tags/v2.0.0.zip",
+    strip_prefix = "streamvbyte-2.0.0",
+    build_file = "streamvbyte.BUILD",
+    integrity = "sha256-O01agOEf3KLTppGFyqt9C+rh2nqNKh0MM+dS+Gq3Svw="
+)
+
+new_git_repository(
+    name = "concurrentqueue",
+    remote = "https://github.com/cameron314/concurrentqueue.git",
+    commit = "79cec4c3bf1ca23ea4a03adfcd3c2c3659684dd2",
+    shallow_since = "1580387311 -0500",
+    build_file_content = """
+
+cc_library(
+    name = "concurrentqueue",
+    hdrs = ["concurrentqueue.h", "blockingconcurrentqueue.h", "lightweightsemaphore.h"],
+    visibility = ["//visibility:public"],
+)
+""",
+)
+
+http_archive(
+    name="arrow",
+    strip_prefix="arrow-apache-arrow-15.0.2",
+    urls = ["https://github.com/apache/arrow/archive/refs/tags/apache-arrow-15.0.2.zip"],
+    build_file_content = all_content,
+    sha256 = "c0ebc13e9bc428c0c9f617444dcd161140e2bf9a7c65c5ae6bf239e5567175fd",
+    patches = ["//patches:ThirdpartyToolchain.cmake.patch"],
+)
+
+
+local_runtime_repo = use_repo_rule(
+    "@rules_python//python/local_toolchains:repos.bzl",
+    "local_runtime_repo",
+)
+
+local_runtime_toolchains_repo = use_repo_rule(
+    "@rules_python//python/local_toolchains:repos.bzl",
+    "local_runtime_toolchains_repo",
+)
+
+# Step 1: Define the Python runtime
+local_runtime_repo(
+    name = "local_python",
+    interpreter_path = "python",
+    on_failure = "fail",
+)
+
+# Step 2: Create toolchains for the runtimes
+local_runtime_toolchains_repo(
+    name = "local_toolchains",
+    runtimes = ["local_python"],
+)
+
+# Step 3: Register the toolchains
+register_toolchains("@local_toolchains//:all", dev_dependency = True)
+
+load_arrow_vcpkg = use_repo_rule("//:load_arrow_vcpkg.bzl", "load_arrow_vcpkg")
+
+load_arrow_vcpkg(name="arrow_vcpkg")

@@ -1,72 +1,53 @@
-#pragma once
-
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <cstring>
 #include <filesystem>
 #include <string_view>
 
 #include "absl/types/span.h"
+#include <boost/iostreams/device/mapped_file.hpp>
+
+inline std::string debug_me(std::string a){
+    std::cout<<"About to open" << a << std::endl;
+    return a;
+}
 
 class MmapFile {
    public:
-    template <typename P>
-    MmapFile(const P& path) {
-        fp = open(path.c_str(), O_RDONLY);
-        if (fp == -1) {
-            throw std::runtime_error(
-                std::string("Could not open the following path ") +
-                std::string(path) + " " + std::string(strerror(errno)));
-        }
-        data_size = std::filesystem::file_size(path);
-        if (data_size != 0) {
-            data_pointer =
-                mmap(nullptr, data_size, PROT_READ, MAP_PRIVATE, fp, 0);
-            if (data_pointer == MAP_FAILED) {
-                throw std::runtime_error(
-                    std::string("Could not mmap the requested file ") +
-                    std::string(path) + " " + std::string(strerror(errno)));
-            }
+    MmapFile(const std::filesystem::path& path): MmapFile(path.string()) {}
+    MmapFile(const std::string& path) {
+        std::uintmax_t size = std::filesystem::file_size(path);
+        if (size == 0) {
+            is_empty = true;
         } else {
-            data_pointer = nullptr;
+            is_empty = false;
+            file.open(path);
         }
     }
 
-    MmapFile(MmapFile&& other) {
-        fp = other.fp;
-        data_size = other.data_size;
-        data_pointer = other.data_pointer;
-
-        other.fp = 0;
-        other.data_size = 0;
-        other.data_pointer = nullptr;
-    }
+    MmapFile(MmapFile&& other): is_empty(other.is_empty), file(std::move(other.file)) {}
 
     MmapFile(const MmapFile&) = delete;
     MmapFile& operator=(const MmapFile& other) = delete;
 
     std::string_view bytes() const {
-        return std::string_view((const char*)data_pointer, data_size);
+        if (is_empty) {
+            return std::string_view(nullptr, 0);
+        } else {
+            return std::string_view((const char*)file.data(), file.size());
+        }
     }
 
     template <typename T>
     absl::Span<const T> data() const {
-        return absl::Span<const T>((const T*)data_pointer,
-                                   data_size / sizeof(T));
-    }
-
-    ~MmapFile() {
-        if (data_pointer != nullptr) {
-            munmap(data_pointer, data_size);
-            close(fp);
+        if (is_empty) {
+            return absl::Span<const T>(nullptr, 0);
+        } else {
+            
+            return absl::Span<const T>((const T*)file.data(),
+                file.size() / sizeof(T));
         }
     }
 
    private:
-    int fp;
-    size_t data_size;
-    void* data_pointer;
+    bool is_empty;
+    boost::iostreams::mapped_file_source file;
 };

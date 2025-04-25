@@ -7,12 +7,18 @@
 #include <functional>
 #include <stdexcept>
 
+#ifdef _MSC_VER
+#define FORCE_INLINE __forceinline
+#else
+#define FORCE_INLINE inline __attribute__((always_inline))
+#endif
+
 inline PyObject* return_error(PyObject**) { return nullptr; }
 
-inline long return_error(long*) { return -1; }
+inline Py_ssize_t return_error(Py_ssize_t*) { return -1; }
 
 template <typename T, typename R, typename... Args>
-__attribute__((always_inline)) inline R convert(R (T::*mf)(Args...),
+FORCE_INLINE R convert(R (T::*mf)(Args...),
                                                 PyObject* obj, Args&&... args) {
 #ifndef NDEBUG
     if (obj->ob_type != &T::Type) [[unlikely]] {
@@ -29,7 +35,7 @@ __attribute__((always_inline)) inline R convert(R (T::*mf)(Args...),
 }
 
 template <typename R, typename... Args>
-__attribute__((always_inline)) inline R convert(R (*mf)(Args...),
+FORCE_INLINE R convert(R (*mf)(Args...),
                                                 Args&&... args) {
     try {
         return std::invoke(mf, std::forward<Args>(args)...);
@@ -40,7 +46,7 @@ __attribute__((always_inline)) inline R convert(R (*mf)(Args...),
 }
 
 template <typename T, typename... Args>
-__attribute__((always_inline)) inline void convert_void(void (T::*mf)(Args...),
+FORCE_INLINE void convert_void(void (T::*mf)(Args...),
                                                         PyObject* obj,
                                                         Args&&... args) {
     if (obj->ob_type != &T::Type) {

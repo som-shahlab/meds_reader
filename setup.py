@@ -4,11 +4,14 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 from typing import List
 
 import setuptools
 from setuptools.command.build_ext import build_ext
 
+
+BAZEL_CMD = 'bazel'
 
 class BazelExtension(setuptools.Extension):
     def __init__(self, name: str, target: str, sourcedir: str):
@@ -28,7 +31,7 @@ def has_nvcc():
 def can_build_simple(sourcedir, env, bazel_extra_args):
     try:
         subprocess.run(
-            args=["bazel"] + bazel_extra_args + ["build", "-c", "opt", "simple_test"],
+            args=[BAZEL_CMD] + bazel_extra_args + ["build", "-c", "opt", "simple_test"],
             cwd=sourcedir,
             env=env,
             check=True,
@@ -44,7 +47,7 @@ class cmake_build_ext(build_ext):
 
         if bazel_extensions:
             try:
-                subprocess.check_output(["bazel", "version"]).decode("utf8")
+                subprocess.check_output([BAZEL_CMD, "version"]).decode("utf8")
             except OSError:
                 raise RuntimeError("Cannot find bazel executable")
 
@@ -58,6 +61,9 @@ class cmake_build_ext(build_ext):
 
             bazel_extra_args: List[str] = []
             extra_args: List[str] = []
+
+            if sys.platform == 'win32':
+                extra_args.extend(["--config=vs2022"])
 
             if source_env.get("DISTDIR"):
                 extra_args.extend(["--distdir", source_env["DISTDIR"]])
@@ -74,7 +80,7 @@ class cmake_build_ext(build_ext):
                 ), "Cannot build C++ extension"
 
             subprocess.run(
-                args=["bazel", "clean", "--expunge"],
+                args=[BAZEL_CMD, "clean", "--expunge"],
                 cwd=sourcedir,
                 env=env,
                 check=True,
@@ -88,7 +94,7 @@ class cmake_build_ext(build_ext):
             targets = [ext.target for ext in bazel_extensions]
 
             subprocess.run(
-                args=["bazel"]
+                args=[BAZEL_CMD]
                 + bazel_extra_args
                 + [
                     "build",
@@ -107,8 +113,13 @@ class cmake_build_ext(build_ext):
 
                 os.makedirs(parent_directory, exist_ok=True)
 
+                source_path = os.path.join(ext.sourcedir, "bazel-bin", ext.target)
+
+                if not os.path.exists(source_path):
+                    source_path = source_path + '.exe'
+
                 shutil.copy(
-                    os.path.join(ext.sourcedir, "bazel-bin", ext.target),
+                    source_path,
                     self.get_ext_fullpath(ext.name),
                 )
 

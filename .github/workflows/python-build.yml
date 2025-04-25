@@ -8,21 +8,13 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-latest, macos-13, macos-14]
-
-    env:
-      CIBW_TEST_REQUIRES: pytest
-      CIBW_TEST_COMMAND: "pytest {project}/tests"
-      CIBW_SKIP: '*-musllinux_* pp*'
-      CIBW_ARCHS: auto64
-      CIBW_BEFORE_ALL_LINUX: bash build/linux_setup.sh
-      CIBW_ENVIRONMENT: MACOSX_DEPLOYMENT_TARGET=12
+        os: [ubuntu-24.04, macos-13, macos-15, windows-2025]
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Build wheels
-      uses: pypa/cibuildwheel@v2.19.1
+      uses: pypa/cibuildwheel@v2.23.2
 
     - uses: actions/upload-artifact@v4
       with:

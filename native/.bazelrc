@@ -1,6 +1,8 @@
-build --cxxopt="-std=c++17"
-build --cxxopt="-Wall"
+build --cxxopt="-std=c++20"
+# build --cxxopt="-Wall"
 build --cxxopt="-mavx"
 build --cxxopt="-fvisibility=hidden"
 build --copt="-fvisibility=hidden"
 build --copt="-mavx"
+
+build:vs2022 --cxxopt="/std:c++20"
