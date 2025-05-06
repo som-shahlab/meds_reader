@@ -727,7 +727,7 @@
     },
     "@@rules_python+//python/uv:uv.bzl%uv": {
       "general": {
-        "bzlTransitiveDigest": "dOoeb3fYycdJAGPRzFWkmn97RVkYYqQ6+8+2pieuPms=",
+        "bzlTransitiveDigest": "Xpqjnjzy6zZ90Es9Wa888ZLHhn7IsNGbph/e6qoxzw8=",
         "usagesDigest": "pVak54OcqSLHO/i6ouAnfH3+L3yyJyDfUSx1i9yXbfY=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
