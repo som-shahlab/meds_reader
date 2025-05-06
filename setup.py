@@ -11,7 +11,7 @@ import setuptools
 from setuptools.command.build_ext import build_ext
 
 
-BAZEL_CMD = 'bazelisk'
+BAZEL_CMD = 'bazel'
 
 class BazelExtension(setuptools.Extension):
     def __init__(self, name: str, target: str, sourcedir: str):
