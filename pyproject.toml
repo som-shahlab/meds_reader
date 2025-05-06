@@ -54,6 +54,7 @@ test-requires = "pytest"
 
 [tool.cibuildwheel.linux]
 before-all = "bash build/linux_setup.sh"
+before-build = "git status"
 
 [tool.cibuildwheel.macos]
 environment = { MACOSX_DEPLOYMENT_TARGET="12" }
