@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm"]
+requires = ["setuptools", "setuptools-scm", "numpy>=2.0.2",]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,7 +12,7 @@ requires-python=">=3.9"
 dependencies = [
   "pyarrow >= 9",
   "meds == 0.3.3",
-  "numpy>=1.16,<2",
+  "numpy>=1.16",
   "pandas>=2.2",
 ]
 
@@ -40,3 +40,20 @@ line_length = 120
 [tool.black]
 line_length = 120
 target_version = ['py310']
+
+[tool.cibuildwheel]
+skip = ["*-musllinux_*", "pp*", "cp313-win*"]
+archs = ["auto64"]
+test-command = [
+  "pip install \"numpy<2\"",
+  "pytest {package}/tests",
+  "pip install \"numpy>2\"",
+  "pytest {package}/tests",
+]
+test-requires = "pytest"
+
+[tool.cibuildwheel.linux]
+before-all = "bash build/linux_setup.sh"
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET="12" }

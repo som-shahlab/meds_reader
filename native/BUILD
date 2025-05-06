@@ -4,126 +4,6 @@ load(
 
 load("@pybind11_bazel//:build_defs.bzl", "pybind_extension", "pybind_library")
 
-cc_binary(
-    name="simple_test",
-    srcs=["simple_test.cc"],
-)
-
-cc_library(
-    name="create_database",
-    srcs=["create_database.cc", "pdqsort.h"],
-    hdrs=["create_database.hh"],
-    deps=[
-        ":dtype",
-        ":arrow",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@concurrentqueue",
-        ":zstd",
-        ":streamvbyte",
-        ":binary_version",
-        ":mmap_file",
-    ],
-)
-
-cc_library(
-    name="filter_database",
-    srcs=["filter_database.cc", "pdqsort.h"],
-    hdrs=["filter_database.hh"],
-    deps=[
-        ":mmap_file",
-    ],
-)
-
-
-cc_library(
-    name="binary_version",
-    hdrs=["binary_version.hh"],
-)
-
-cc_library(
-    name="dtype",
-    hdrs=["dtype.hh"],
-)
-
-cc_library(
-    name="fast_shared_ptr",
-    hdrs=["fast_shared_ptr.hh"],
-)
-
-cc_library(
-    name="perfect_hash",
-    hdrs=["perfect_hash.hh"],
-)
-
-pybind_library(
-    name="pyutils",
-    hdrs=["pyutils.hh"],
-)
-
-pybind_library(
-    name="mmap_file",
-    hdrs=["mmap_file.hh"],
-    deps=[
-        "@com_google_absl//absl/types:span",
-    ]
-)
-
-cc_library(
-    name="property_reader",
-    hdrs=["property_reader.hh"],
-    srcs=["property_reader.cc"],
-    deps=[":pyutils", ":dtype", ":zstd", ":streamvbyte",
-        "@com_google_absl//absl/time", "@com_google_absl//absl/types:span", ":mmap_file"]
-)
-
-cc_binary(
-    name="fast_shared_ptr_test",
-    srcs=["fast_shared_ptr_test.cc"],
-    deps=[
-        ":fast_shared_ptr",
-    ],
-)
-
-cc_binary(
-    name="meds_reader_convert",
-    srcs=["meds_reader_convert.cc"],
-    deps=[
-        ":create_database",
-        "@CLI11//:cli11",
-    ],
-)
-
-cc_binary(
-    name="meds_reader_filter",
-    srcs=["meds_reader_filter.cc"],
-    deps=[
-        ":filter_database",
-        "@CLI11//:cli11",
-    ],
-)
-
-pybind_extension(
-    name="_meds_reader",
-    srcs=[
-        "meds_reader.cc",
-    ],
-    linkopts = select({
-        "@platforms//os:osx": ["-undefined", "dynamic_lookup"],
-        "//conditions:default": [],
-    }),
-    # copts = ["-fno-inline"],
-    deps=[
-        "@com_google_absl//absl/container:flat_hash_map",
-        ":pyutils",
-        ":perfect_hash",
-        ":dtype",
-        ":property_reader",
-        ":fast_shared_ptr",
-        ":binary_version",
-    ],
-)
-
 cmake(
     name = "arrow",
     cache_entries = {
@@ -151,35 +31,132 @@ cmake(
     linkopts = ["-pthread"],
 )
 
-cmake(
-    name = "zstd",
-    cache_entries = {
-        "CMAKE_C_FLAGS": "-fPIC -fvisibility=hidden",
-        "CMAKE_CXX_FLAGS": "-fPIC -fvisibility=hidden",
-        "CMAKE_INSTALL_LIBDIR": "lib",
-	    "CMAKE_OSX_DEPLOYMENT_TARGET": "12",
-
-        "ZSTDLIB_VISIBLE": "hidden",
-        "ZSTDERRORLIB_VISIBLE": "hidden",
-        "ZDICTLIB_VISIBLE": "hidden",
-        "ZSTDLIB_STATIC_API": "hidden",
-        "ZDICTLIB_STATIC_API": "hidden",
-    },
-    working_directory="build/cmake",
-    lib_source = "@zstd//:all",
-    out_static_libs = ["libzstd.a"],
-    generate_args = ["-GNinja"],
+cc_library(
+    name="arrow_stub",
+    deps= select({
+        "@bazel_tools//src/conditions:windows": ["@arrow_vcpkg//:arrow"],
+        "//conditions:default": [":arrow"],
+    }),
 )
 
-cmake(
-    name = "streamvbyte",
-    cache_entries = {
-        "CMAKE_C_FLAGS": "-fPIC -fvisibility=hidden",
-        "CMAKE_CXX_FLAGS": "-fPIC -fvisibility=hidden",
-        "CMAKE_INSTALL_LIBDIR": "lib",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "12",
-    },
-    lib_source = "@streamvbyte//:all",
-    out_static_libs = ["libstreamvbyte.a"],
-    generate_args = ["-GNinja"],
+cc_binary(
+    name="simple_test",
+    srcs=["simple_test.cc"],
+)
+
+cc_library(
+    name="create_database",
+    srcs=["create_database.cc", "pdqsort.h"],
+    hdrs=["create_database.hh"],
+    deps=[
+        ":dtype",
+        ":arrow_stub",
+        "@abseil-cpp//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@concurrentqueue",
+        "@zstd",
+        "@streamvbyte//:streamvbyte",
+        ":binary_version",
+        ":mmap_file",
+    ],
+)
+
+cc_library(
+    name="filter_database",
+    srcs=["filter_database.cc", "pdqsort.h"],
+    hdrs=["filter_database.hh"],
+    deps=[
+        ":mmap_file",
+    ],
+)
+
+
+cc_library(
+    name="binary_version",
+    hdrs=["binary_version.hh"],
+)
+
+cc_library(
+    name="dtype",
+    hdrs=["dtype.hh"],
+    
+)
+
+cc_library(
+    name="fast_shared_ptr",
+    hdrs=["fast_shared_ptr.hh"],
+)
+
+cc_library(
+    name="perfect_hash",
+    hdrs=["perfect_hash.hh"],
+)
+
+pybind_library(
+    name="pyutils",
+    hdrs=["pyutils.hh"],
+)
+
+pybind_library(
+    name="mmap_file",
+    hdrs=["mmap_file.hh"],
+    deps=[
+        "@abseil-cpp//absl/types:span",
+        "@boost.iostreams",
+    ],
+)
+
+cc_library(
+    name="property_reader",
+    hdrs=["property_reader.hh"],
+    srcs=["property_reader.cc"],
+    deps=[":pyutils", ":dtype", "@zstd", "@streamvbyte//:streamvbyte",
+        "@abseil-cpp//absl/time", "@abseil-cpp//absl/types:span", ":mmap_file"],
+)
+
+cc_binary(
+    name="fast_shared_ptr_test",
+    srcs=["fast_shared_ptr_test.cc"],
+    deps=[
+        ":fast_shared_ptr",
+    ],
+)
+
+cc_binary(
+    name="meds_reader_convert",
+    srcs=["meds_reader_convert.cc"],
+    deps=[
+        ":create_database",
+        "@cli11//:cli11",
+    ],
+)
+
+cc_binary(
+    name="meds_reader_filter",
+    srcs=["meds_reader_filter.cc"],
+    deps=[
+        ":filter_database",
+        "@cli11//:cli11",
+    ],
+)
+
+pybind_extension(
+    name="_meds_reader",
+    srcs=[
+        "meds_reader.cc",
+    ],
+    linkopts = select({
+        "@platforms//os:osx": ["-undefined", "dynamic_lookup"],
+        "//conditions:default": [],
+    }),
+    # copts = ["-fno-inline"],
+    deps=[
+        "@abseil-cpp//absl/container:flat_hash_map",
+        ":pyutils",
+        ":perfect_hash",
+        ":dtype",
+        ":property_reader",
+        ":fast_shared_ptr",
+        ":binary_version",
+    ],
 )

@@ -6,8 +6,12 @@ native/bazel-*
 *egg-info
 docs/source/meds_reader.py
 docs/source/README_copy.md
-src/meds_reader/meds_reader_convert
+src/meds_reader/_meds_reader*
+src/meds_reader/meds_reader_convert*
+src/meds_reader/meds_reader_filter*
 *.swp
 docs/source/html/
 docs/source/latex/
 docs/source/_build/
+wheelhouse
+build

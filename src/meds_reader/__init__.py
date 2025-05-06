@@ -186,6 +186,12 @@ class _SubjectDatabaseWrapper:
     def map(self, map_func: Callable[[Iterator[Any]], A]) -> Iterator[A]:
         return self._db._map_fast(map_func, self._selected_subjects)
 
+def _in_notebook():
+    """
+    Returns ``True`` if the module is running in IPython kernel,
+    ``False`` if in IPython shell or other Python shell.
+    """
+    return 'ipykernel' in sys.modules
 
 class SubjectDatabase:
     def __init__(self, path_to_database: str, num_threads: int = 1) -> None:
@@ -195,6 +201,8 @@ class SubjectDatabase:
         self._all_subject_ids: np.ndarray = np.array(list(self._database))
 
         if num_threads != 1:
+            assert not _in_notebook(), 'Python multiprocessing does not reliably work inside Jupyter notebooks'            
+
             self._processes: Optional[List[SpawnProcess]] = []
 
             self._input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]] = mp.SimpleQueue()
