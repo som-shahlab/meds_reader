@@ -201,7 +201,8 @@ class SubjectDatabase:
         self._all_subject_ids: np.ndarray = np.array(list(self._database))
 
         if num_threads != 1:
-            assert not _in_notebook(), 'Python multiprocessing does not reliably work inside Jupyter notebooks'            
+            if _in_notebook():
+                warnings.warn("Warning: You are using meds_reader multiprocessing within a Jupyter notebook. This does not reliably work and your code might randomly fail.")
 
             self._processes: Optional[List[SpawnProcess]] = []
 
