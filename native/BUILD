@@ -115,6 +115,7 @@ cc_library(
     hdrs=["property_reader.hh"],
     srcs=["property_reader.cc"],
     deps=[":pyutils", ":dtype", "@zstd", "@streamvbyte//:streamvbyte",
+        "@abseil-cpp//absl/numeric:bits",
         "@abseil-cpp//absl/time", "@abseil-cpp//absl/types:span", ":mmap_file"],
 )
 

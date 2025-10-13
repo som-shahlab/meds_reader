@@ -18,6 +18,7 @@
 #include <vector>
 #include <bit>
 
+#include "absl/numeric/bits.h"
 #include "absl/time/civil_time.h"
 #include "absl/types/span.h"
 #include "dtype.hh"
@@ -261,7 +262,7 @@ struct StringPropertyReader : PropertyReader {
             size_t current_result = result_index;
             while (null_byte != 0) {
                 static_assert(sizeof(uint64_t) == sizeof(unsigned long long));
-                int num_zeros = std::countr_zero(null_byte);
+                int num_zeros = absl::countr_zero(null_byte);
                 current_result += num_zeros;
 
                 null_byte >>= 1;
@@ -512,7 +513,7 @@ struct PrimitivePropertyReader : PropertyReader {
         for (uint64_t null_byte : null_bytes) {
             size_t current_result = result_index;
             while (null_byte != 0) {
-                int num_zeros = std::countr_zero(null_byte);
+                int num_zeros = absl::countr_zero(null_byte);
                 current_result += num_zeros;
 
                 null_byte >>= 1;
