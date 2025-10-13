@@ -42,7 +42,7 @@ line_length = 120
 target_version = ['py310']
 
 [tool.cibuildwheel]
-skip = ["*-musllinux_*", "pp*", "cp313-win*"]
+skip = ["*-musllinux_*", "pp*", "cp313-win*", "cp314-macosx*"]
 archs = ["auto64"]
 test-command = [
   "pip install \"numpy<2\"",
@@ -58,3 +58,4 @@ before-build = "git status"
 
 [tool.cibuildwheel.macos]
 environment = { MACOSX_DEPLOYMENT_TARGET="12" }
+/ski
