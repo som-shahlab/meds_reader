@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "absl/numeric/bits.h"
 #include <set>
 #include <stdexcept>
 #include <vector>
@@ -10,7 +11,7 @@
 namespace {
 
 inline uint64_t next_pow2(uint64_t x) {
-    return x == 1 ? 1 : ((uint64_t)1) << ((uint64_t) (64 - std::countl_zero(x - 1)));
+    return x == 1 ? 1 : ((uint64_t)1) << ((uint64_t) (64 - absl::countl_zero(x - 1)));
 }
 
 }  // namespace

@@ -90,6 +90,10 @@ cc_library(
 cc_library(
     name="perfect_hash",
     hdrs=["perfect_hash.hh"],
+
+    deps = [
+        "@abseil-cpp//absl/numeric:bits",
+	]
 )
 
 pybind_library(
@@ -151,6 +155,7 @@ pybind_extension(
     }),
     # copts = ["-fno-inline"],
     deps=[
+        "@abseil-cpp//absl/numeric:bits",
         "@abseil-cpp//absl/container:flat_hash_map",
         ":pyutils",
         ":perfect_hash",

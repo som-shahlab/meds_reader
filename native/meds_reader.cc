@@ -8,6 +8,7 @@
 #include <fstream>
 #include <bit>
 
+#include "absl/numeric/bits.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/str_cat.h"
@@ -828,7 +829,7 @@ inline PyObject* EventPropertyIterator::next() {
         return PyErr_Format(PyExc_StopIteration,
                             "Exceeded the number of properties in events");
     } else {
-        int num_zeros = std::countr_zero(current_index);
+        int num_zeros = absl::countr_zero(current_index);
         uint64_t mask = 1;
         mask <<= (uint64_t)num_zeros;
         current_index &= ~mask;
