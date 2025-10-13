@@ -154,6 +154,7 @@ def transform_meds_dataset(
     target_dataset_path: str,
     transform_func: Callable[[MutableSubject], MutableSubject],
     num_threads: int = 1,
+    schema: Optional[pa.Schema] = None,
 ):
     """Transform a MEDS dataset using the provided transform_func"""
     os.mkdir(target_dataset_path)
@@ -166,15 +167,14 @@ def transform_meds_dataset(
 
     assert len(source_parquet_files) > 0
 
-    schema: Optional[pa.Schema] = None
+    if schema is None:
+        for file in source_parquet_files:
+            reader = pq.ParquetFile(file)
 
-    for file in source_parquet_files:
-        reader = pq.ParquetFile(file)
-
-        if schema is None:
-            schema = reader.schema_arrow
-        else:
-            assert schema == reader.schema_arrow
+            if schema is None:
+                schema = reader.schema_arrow
+            else:
+                assert schema == reader.schema_arrow
 
     work_queue: multiprocessing.SimpleQueue[Optional[str]] = mp.SimpleQueue()
     for file in source_parquet_files:
