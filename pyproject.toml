@@ -58,4 +58,3 @@ before-build = "git status"
 
 [tool.cibuildwheel.macos]
 environment = { MACOSX_DEPLOYMENT_TARGET="12" }
-/ski
