@@ -51,7 +51,7 @@ test-command = [
   "pytest {package}/tests",
 ]
 test-requires = "pytest"
-before-build = "git status; git restore native/MODULES.bazel.lock"
+before-build = "git status; git restore native/MODULE.bazel.lock"
 
 [tool.cibuildwheel.linux]
 before-all = "bash build/linux_setup.sh"
