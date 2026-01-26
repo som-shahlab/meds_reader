@@ -1,3 +1,4 @@
+# Clones vcpkg and installs Arrow for Windows builds.
 def _impl(repository_ctx):
   repository_ctx.execute(["git", "clone", "https://github.com/microsoft/vcpkg.git"])
   repository_ctx.execute(["./vcpkg/bootstrap-vcpkg.bat"])

@@ -1,3 +1,7 @@
+// Defines the internal DataType enum used across the native layer.
+//
+// This header declares the compact on-disk type identifiers used to
+// serialize per-property data and map them to Python/Arrow types.
 #pragma once
 
 #include <cstdint>

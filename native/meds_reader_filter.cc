@@ -1,8 +1,13 @@
+// CLI entry point for filtering meds_reader databases.
+//
+// This file parses command-line arguments and delegates to the native
+// filter routine to create a subset database by subject id.
 #include <CLI/CLI.hpp>
 #include <iostream>
 
 #include "filter_database.hh"
 
+// Parses arguments and runs dataset filtering.
 int main(int argc, char** argv) {
     CLI::App app{
         "meds_reader_filter is a program for converting a MEDS dataset to a "

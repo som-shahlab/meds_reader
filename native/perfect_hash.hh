@@ -1,3 +1,8 @@
+// Implements a simple perfect-hash map for pointer keys.
+//
+// This header builds a collision-free hash table for a fixed set of
+// pointers by searching for a multiplier. It is used to map property
+// name PyObject pointers to indices efficiently.
 #pragma once
 
 #include <cstdint>
@@ -10,6 +15,7 @@
 
 namespace {
 
+// Rounds up to the next power of two.
 inline uint64_t next_pow2(uint64_t x) {
     return x == 1 ? 1 : ((uint64_t)1) << ((uint64_t) (64 - absl::countl_zero(x - 1)));
 }
@@ -19,6 +25,7 @@ inline uint64_t next_pow2(uint64_t x) {
 template <typename T>
 class PerfectHashMap {
    public:
+    // Builds a collision-free hash map for the provided pointers.
     PerfectHashMap(std::vector<T*> items) {
         hash_map_size = next_pow2(items.size() * items.size());
         hash_map_size_mask = hash_map_size - 1;
@@ -86,6 +93,7 @@ class PerfectHashMap {
         }
     }
 
+    // Returns the index for an item, or -1 if not present.
     int64_t get_index(T* item) const {
         size_t index = apply_hash(item);
         auto entry = hash_map[index];
@@ -96,6 +104,7 @@ class PerfectHashMap {
         }
     }
 
+    // Returns all stored values in hash order.
     std::vector<T*> get_values() const {
         std::vector<T*> result;
         for (const auto& entry : hash_map) {
@@ -111,6 +120,7 @@ class PerfectHashMap {
     size_t hash_map_size;
     size_t hash_map_size_mask;
 
+    // Applies the configured hash function to a pointer.
     size_t apply_hash(T* item) const {
         uintptr_t value = reinterpret_cast<uintptr_t>(item);
         return ((value * multiplier) % modulus) & hash_map_size_mask;

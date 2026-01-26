@@ -18,6 +18,8 @@ import meds_reader.transform
 
 metadata = {"dataset_name": "Testing Dataset!"}
 
+
+# Sleeps to avoid Windows file consistency issues.
 def sleep_on_windows():
     if sys.platform == 'win32':
         # Windows has file consistency bugs/ issues
@@ -26,6 +28,7 @@ def sleep_on_windows():
 
 
 @pytest.fixture
+# Builds a temporary MEDS dataset fixture.
 def meds_dataset(tmpdir: str):
     meds_dir = os.path.join(tmpdir, "meds")
 
@@ -91,7 +94,9 @@ def meds_dataset(tmpdir: str):
     pq.write_table(table, os.path.join(data_dir, "entries.parquet"))
     return os.path.join(tmpdir, "meds")
 
+
 @pytest.fixture
+# Builds a SubjectDatabase fixture from a converted dataset.
 def subject_database(tmpdir: str, meds_dataset: str):
 
     meds_reader_dir = os.path.join(tmpdir, "meds_reader")
@@ -107,6 +112,7 @@ def subject_database(tmpdir: str, meds_dataset: str):
 
 
 @pytest.fixture
+# Builds a multithreaded SubjectDatabase fixture.
 def threaded_subject_database(tmpdir: str, meds_dataset: str):
 
     meds_reader_dir = os.path.join(tmpdir, "meds_reader")
@@ -121,25 +127,30 @@ def threaded_subject_database(tmpdir: str, meds_dataset: str):
     return meds_reader.SubjectDatabase(str(meds_reader_dir), num_threads=4)
 
 
+# Verifies metadata passthrough from the dataset.
 def test_metadata(subject_database):
     with open(os.path.join(subject_database.path_to_database, "metadata", "dataset.json")) as f:
         loaded_metadata = json.load(f)
     assert loaded_metadata == metadata
 
 
+# Verifies database length matches subject count.
 def test_size(subject_database):
     assert len(subject_database) == 2
 
 
+# Verifies missing subjects raise KeyError.
 def test_missing(subject_database):
     with pytest.raises(KeyError):
         subject_database[34234]
 
 
+# Verifies iteration over subject ids.
 def test_iter(subject_database):
     assert list(subject_database) == [32, 64]
 
 
+# Extracts subject ids from a subject iterator.
 def h(subjects):
     result = []
     for p in subjects:
@@ -147,6 +158,7 @@ def h(subjects):
     return result
 
 
+# Extracts subject ids with associated row data.
 def h2(subjects_and_data):
     result = []
     for subject, rows in subjects_and_data:
@@ -157,6 +169,7 @@ def h2(subjects_and_data):
     return result
 
 
+# Exercises map and map_with_data helpers.
 def map_helper(subject_database):
 
     results = list(subject_database.map(h))
@@ -178,15 +191,18 @@ def map_helper(subject_database):
     assert final_result == {(32, 1000), (64, 1)}
 
 
+# Verifies map on a single-threaded database.
 def test_map(subject_database):
     map_helper(subject_database)
 
 
+# Verifies map on a threaded database.
 def test_map_threaded(threaded_subject_database):
     map_helper(threaded_subject_database)
     threaded_subject_database.terminate()
 
 
+# Verifies property schema exposed by the database.
 def test_properties(subject_database):
     print(subject_database.properties)
     assert subject_database.properties == {
@@ -199,6 +215,7 @@ def test_properties(subject_database):
     }
 
 
+# Verifies missing event properties raise errors.
 def test_missing_property(subject_database):
     p = subject_database[32]
     e = p.events[0]
@@ -207,6 +224,7 @@ def test_missing_property(subject_database):
         print(e.missing)
 
 
+# Verifies subject and event lookup behavior.
 def test_lookup(subject_database):
     p = subject_database[32]
 
@@ -241,6 +259,7 @@ def test_lookup(subject_database):
     }
 
 
+# Verifies subject filtering preserves data consistency.
 def test_filter(subject_database):
     print(subject_database.path_to_database)
     sub_database = subject_database.filter([32])
@@ -270,6 +289,7 @@ def test_filter(subject_database):
     assert p.events[1].datetime_value == datetime.datetime(1999, 4, 2, 2, 4, 29, 999999)
 
 
+# Example transform function for testing dataset transforms.
 def _example_transform(
     subject: meds_reader.transform.MutableSubject,
 ) -> meds_reader.transform.MutableSubject:
@@ -278,6 +298,7 @@ def _example_transform(
     return subject
 
 
+# Verifies dataset transform and conversion pipeline.
 def test_transform(tmpdir: str, meds_dataset: str):
 
     target = os.path.join(tmpdir, "modified_meds")

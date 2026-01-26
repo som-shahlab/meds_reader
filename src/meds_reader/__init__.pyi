@@ -14,6 +14,7 @@ class SubjectDatabase:
     It also stores metadata such as meds.DatasetMetadat and the custom per-event properties.
     """
 
+    # Opens a SubjectDatabase from a path on disk.
     def __init__(self, path_to_database: str, num_threads: int = 1) -> None:
         """Open a SubjectDatabase. The path must be from convert_to_meds_reader."""
         ...
@@ -23,22 +24,27 @@ class SubjectDatabase:
     properties: Mapping[str, pa.DataType]
     "The per-event properties for this dataset"
 
+    # Returns the number of subjects in the database.
     def __len__(self) -> int:
         """The number of subjects in the database"""
         ...
 
+    # Retrieves a single subject by id.
     def __getitem__(self, subject_id: int) -> Subject:
         """Retrieve a single subject from the database"""
         ...
 
+    # Iterates over subject ids in the database.
     def __iter__(self) -> Iterator[int]:
         """Get all subject ids in the database"""
         ...
 
+    # Filters the database to a list of subjects.
     def filter(self, subject_ids: List[int]) -> SubjectDatabase:
         """Filter the database to a list of subjects"""
         ...
 
+    # Applies a map function to subjects.
     def map(self, map_func: Callable[[Iterator[Subject]], A]) -> Iterator[A]:
         """Apply a function to every subject in the database, in a multi-threaded manner.
 
@@ -46,6 +52,7 @@ class SubjectDatabase:
         """
         ...
 
+    # Applies a map function to subjects with associated data rows.
     def map_with_data(
         self,
         map_func: Callable[[Iterator[Tuple[Subject, Sequence[Any]]]], A],
@@ -64,7 +71,9 @@ class SubjectDatabase:
         """
         ...
 
+    # Enters a context-managed database session.
     def __enter__(self) -> SubjectDatabase: ...
+    # Exits a context-managed database session.
     def __exit__(self, exc_type, exc_val, exc_tb) -> None: ...
 
 class Subject:
@@ -85,10 +94,12 @@ class Event:
     code: str
     "An identifier for the type of event that occured"
 
+    # Retrieves a dynamic event property by name.
     def __getattr__(self, name: str) -> Any:
         """Events can contain arbitrary additional properties. This retrieves the specified property, or returns None"""
         ...
 
+    # Iterates through non-None event properties.
     def __iter__(self) -> Iterator[Tuple[str, Any]]:
         """Iterate through the non-None properties for this type."""
         ...

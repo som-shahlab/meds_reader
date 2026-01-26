@@ -18,6 +18,7 @@ mp = multiprocessing.get_context("spawn")
 class MutableSubject:
     """A subject consists of a subject_id and a sequence of Events"""
 
+    # Initializes a subject with an ID and mutable event list.
     def __init__(self, subject_id, events: List[MutableEvent] = []):
         # Create a new list to avoid bugs related to shared default parameters
         if events == []:
@@ -32,6 +33,7 @@ class MutableSubject:
     events: List[MutableEvent]
     "Items that have happened to a subject"
 
+    # Compares subjects by ID and events.
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MutableSubject):
             return NotImplemented
@@ -42,6 +44,7 @@ class MutableEvent:
     """An event represents a single unit of information about a subject.
     It contains a time and code, and potentially more properties."""
 
+    # Initializes an event with time, code, and arbitrary properties.
     def __init__(self, time: datetime.datetime, code: str, properties: Dict[str, Any] = {}):
         if properties == {}:
             properties = {}
@@ -57,24 +60,30 @@ class MutableEvent:
     code: str
     "An identifier for the type of event that occured"
 
+    # Looks up a dynamic property by name.
     def __getattr__(self, name: str) -> Any:
         """Events can contain arbitrary additional properties. This retrieves the specified property, or returns None"""
         return self.properties.get(name)
 
+    # Sets a dynamic property on the event.
     def __setattr__(self, name: str, value: Any) -> None:
         self.properties[name] = value
 
+    # Iterates over all stored properties.
     def __iter__(self) -> Iterator[Tuple[str, Any]]:
         """Iterate over all non-None properties within this event."""
         yield from self.properties.items()
 
+    # Compares events by their property maps.
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MutableEvent):
             return NotImplemented
         return self.properties == other.properties
 
 
+# Converts a list of event dicts into a MutableSubject.
 def _convert_dict_to_subject(subject_id, events: List[Mapping[str, Any]]) -> MutableSubject:
+    # Builds a MutableEvent from a raw event mapping.
     def create_event(event_dict: Mapping[str, Any]) -> MutableEvent:
         time = event_dict["time"]
         code = event_dict["code"]
@@ -87,7 +96,9 @@ def _convert_dict_to_subject(subject_id, events: List[Mapping[str, Any]]) -> Mut
     )
 
 
+# Converts a MutableSubject into a list of event dicts.
 def _convert_subject_to_dict(subject: MutableSubject) -> List[Mapping[str, Any]]:
+    # Builds a serialized event mapping for a subject.
     def create_event(event: MutableEvent) -> Mapping[str, Any]:
         result = {k: v for k, v in event}
         result["subject_id"] = subject.subject_id
@@ -96,6 +107,7 @@ def _convert_subject_to_dict(subject: MutableSubject) -> List[Mapping[str, Any]]
     return [create_event(event) for event in subject.events]
 
 
+# Processes parquet files and writes transformed events to a target file.
 def _transform_meds_dataset_worker(
     work_queue: multiprocessing.SimpleQueue[Optional[str]],
     transform_func_pkl: bytes,
@@ -118,6 +130,7 @@ def _transform_meds_dataset_worker(
 
         transformed_events: List[Mapping[str, Any]] = []
 
+        # Emits transformed events for the current subject.
         def flush_subject():
             assert current_subject_id is not None
             assert current_events is not None
@@ -149,6 +162,7 @@ def _transform_meds_dataset_worker(
             transformed_events = []
 
 
+# Transforms a MEDS dataset into a new dataset with a provided function.
 def transform_meds_dataset(
     source_dataset_path: str,
     target_dataset_path: str,

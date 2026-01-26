@@ -1,3 +1,9 @@
+// Implements property readers for meds_reader data files.
+//
+// This file provides readers for string, timestamp, primitive, and null
+// map properties. It handles zstd decompression, dictionary decoding,
+// and conversion to Python objects while keeping per-subject reads fast
+// and minimizing allocations.
 #include "property_reader.hh"
 
 #define PY_SSIZE_T_CLEAN
@@ -31,10 +37,12 @@ namespace {
 
 bool datetime_initialized = false;
 
+// Releases a ZSTD decompression context.
 auto context_deleter = [](ZSTD_DCtx* context) { ZSTD_freeDCtx(context); };
 
 class ZstdRowReader {
    public:
+    // Opens a zstd stream reader for row data.
     ZstdRowReader(const std::string& path, ZSTD_DCtx* ctx)
         : fname(path),
           fstream(path, std::ifstream::in | std::ifstream::binary),
@@ -42,6 +50,7 @@ class ZstdRowReader {
           current_offset(0),
           uncompressed_size(0) {}
 
+    // Returns the next (data, count) tuple from the stream.
     std::optional<std::tuple<std::string_view, int64_t>> get_next() {
         if (current_offset == uncompressed_size) {
             bool could_load_more = try_to_load_more_data();
@@ -74,6 +83,7 @@ class ZstdRowReader {
     }
 
    private:
+    // Loads and decompresses the next chunk of data.
     bool try_to_load_more_data() {
         if (fstream.eof()) {
             return false;
@@ -129,6 +139,7 @@ class ZstdRowReader {
 };
 
 struct StringPropertyReader : PropertyReader {
+    // Loads string dictionaries and prepares a reader for string properties.
     StringPropertyReader(const std::filesystem::path& property_path)
         : zdict_file(property_path / "zdict"),
           data_file(property_path / "data"),
@@ -174,6 +185,7 @@ struct StringPropertyReader : PropertyReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
+    // Reads string properties for a subject into Python objects.
     size_t get_property_data(int32_t subject_offset, int32_t length,
                              PyObject** result, PyObject** allocated) {
         size_t num_allocated = 0;
@@ -291,6 +303,7 @@ struct StringPropertyReader : PropertyReader {
 };
 
 struct TimePropertyReader : PropertyReader {
+    // Prepares a reader for time properties with optional zstd dictionary.
     TimePropertyReader(const std::filesystem::path& property_path)
         : zdict_file(property_path / "zdict"),
           data_file(property_path / "data"),
@@ -313,6 +326,7 @@ struct TimePropertyReader : PropertyReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
+    // Reads time properties and expands them into Python datetimes.
     size_t get_property_data(int32_t subject_offset, int32_t length,
                              PyObject** result, PyObject** allocated) {
         size_t num_allocated = 0;
@@ -447,6 +461,7 @@ struct TimePropertyReader : PropertyReader {
 
 template <typename T, typename G>
 struct PrimitivePropertyReader : PropertyReader {
+    // Prepares a reader for primitive properties with a transform function.
     PrimitivePropertyReader(const std::filesystem::path& property_path,
                             G transform)
         : transform_func(transform),
@@ -472,6 +487,7 @@ struct PrimitivePropertyReader : PropertyReader {
 
     std::vector<char> decompressed;
 
+    // Reads primitive properties and applies a transform per value.
     size_t get_property_data(int32_t subject_offset, int32_t length,
                              PyObject** result, PyObject** allocated) {
         size_t num_allocated = 0;
@@ -541,12 +557,14 @@ struct PrimitivePropertyReader : PropertyReader {
 };
 
 template <typename T, typename G>
+// Creates a primitive property reader with a transform function.
 std::unique_ptr<PropertyReader> make_primitive_reader(
     const std::filesystem::path& property_path, G transform) {
     return std::make_unique<PrimitivePropertyReader<T, G>>(property_path,
                                                            transform);
 }
 
+// Builds a Python datetime from a microsecond offset.
 PyObject* create_datetime(int64_t offset) {
     absl::CivilSecond day(1970, 1, 1);
 
@@ -565,6 +583,7 @@ PyObject* create_datetime(int64_t offset) {
     return dt.steal();
 }
 
+// Maps internal data types to pyarrow constructor arguments.
 std::pair<const char*, const char*> get_pyarrow_arguments(DataType type) {
     switch (type) {
         case DataType::STRING:
@@ -606,6 +625,7 @@ std::pair<const char*, const char*> get_pyarrow_arguments(DataType type) {
 
 template <typename T>
 struct NullMapReaderImpl : NullMapReader {
+    // Prepares a reader for null bitmap data.
     NullMapReaderImpl(const std::filesystem::path& root_directory)
         : zdict_file(root_directory / "meds_reader.null_map" / "zdict"),
           data_file(root_directory / "meds_reader.null_map" / "data"),
@@ -627,6 +647,7 @@ struct NullMapReaderImpl : NullMapReader {
 
     std::vector<char> decompressed;
 
+    // Reads null maps for a subject into the provided buffer.
     void get_null_map(int32_t subject_offset, int32_t length,
                       uint64_t* result) {
         uint64_t offset = data_file.data<uint64_t>()[subject_offset];
@@ -664,6 +685,7 @@ struct NullMapReaderImpl : NullMapReader {
 
 }  // namespace
 
+// Creates a PropertyReader for a specific property type.
 std::unique_ptr<PropertyReader> create_property_reader(
     const std::filesystem::path& root_directory,
     const std::string& property_name, DataType property_type) {
@@ -726,6 +748,7 @@ std::unique_ptr<PropertyReader> create_property_reader(
         std::to_string(static_cast<uint64_t>(property_type)));
 }
 
+// Creates a NullMapReader sized to the number of properties.
 std::unique_ptr<NullMapReader> create_null_map_reader(
     const std::filesystem::path& root_directory, int num_properties) {
     if (num_properties > 64) {
@@ -741,6 +764,7 @@ std::unique_ptr<NullMapReader> create_null_map_reader(
     }
 }
 
+// Builds a pyarrow dtype object for a given DataType.
 PyObjectWrapper create_pyarrow_dtype(PyObject* pyarrow, DataType type) {
     auto name_and_arg = get_pyarrow_arguments(type);
 

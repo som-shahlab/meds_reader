@@ -1,3 +1,10 @@
+// Implements MEDS dataset conversion to meds_reader format.
+//
+// This file reads MEDS Parquet shards, derives per-subject event streams,
+// builds dictionaries and compressed property blobs, and writes the
+// on-disk meds_reader layout. It does so by sampling to build zstd
+// dictionaries, sharding work across threads, and then merging/sorting
+// shard outputs into final data and index files.
 #include "create_database.hh"
 
 #define ZSTD_STATIC_LINKING_ONLY
@@ -50,11 +57,13 @@ constexpr int QUEUE_SIZE = 1000;
 constexpr int64_t SEMAPHORE_BLOCK_SIZE = 100;
 
 template <typename T>
+// Appends a literal value to a byte vector.
 void add_literal_to_vector(std::vector<char>& data, T to_add) {
     const char* bytes = reinterpret_cast<const char*>(&to_add);
     data.insert(std::end(data), bytes, bytes + sizeof(T));
 }
 
+// Appends a length-prefixed string to a byte vector.
 void add_string_to_vector(std::vector<char>& data, std::string_view to_add) {
     add_literal_to_vector(data, to_add.size());
     data.insert(std::end(data), std::begin(to_add), std::end(to_add));
@@ -62,11 +71,13 @@ void add_string_to_vector(std::vector<char>& data, std::string_view to_add) {
 
 class ZstdRowWriter {
    public:
+    // Opens a zstd row writer for an output file.
     ZstdRowWriter(const std::string& path, ZSTD_CCtx* ctx)
         : fname(path),
           fstream(path, std::ifstream::out | std::ifstream::binary),
           context(ctx) {}
 
+    // Adds a data chunk with a count to the current buffer.
     void add_next(std::string_view data, uint64_t count) {
         add_literal_to_vector(uncompressed_buffer, count);
         add_string_to_vector(uncompressed_buffer,
@@ -77,6 +88,7 @@ class ZstdRowWriter {
         }
     }
 
+    // Flushes any buffered data on destruction.
     ~ZstdRowWriter() {
         if (uncompressed_buffer.size() > 0) {
             flush_compressed();
@@ -86,6 +98,7 @@ class ZstdRowWriter {
     const std::string fname;
 
    private:
+    // Compresses and writes the current buffer.
     void flush_compressed() {
         size_t needed_size = ZSTD_compressBound(uncompressed_buffer.size());
 
@@ -118,6 +131,7 @@ class ZstdRowWriter {
 
 class ZstdRowReader {
    public:
+    // Opens a zstd row reader for an input file.
     ZstdRowReader(const std::string& path, ZSTD_DCtx* ctx)
         : fname(path),
           fstream(path, std::ifstream::in | std::ifstream::binary),
@@ -125,6 +139,7 @@ class ZstdRowReader {
           current_offset(0),
           uncompressed_size(0) {}
 
+    // Returns the next (data, count) tuple from the stream.
     absl::optional<std::tuple<std::string_view, uint64_t>> get_next() {
         if (current_offset == uncompressed_size) {
             bool could_load_more = try_to_load_more_data();
@@ -157,6 +172,7 @@ class ZstdRowReader {
     }
 
    private:
+    // Loads and decompresses the next chunk of data.
     bool try_to_load_more_data() {
         if (fstream.eof()) {
             return false;
@@ -213,6 +229,7 @@ class ZstdRowReader {
 
 template <typename T>
 struct CappedQueue {
+    // Initializes a queue with bounded capacity across threads.
     CappedQueue(int num_threads)
         : queues(num_threads), semaphore(QUEUE_SIZE * num_threads) {}
 
@@ -222,11 +239,13 @@ struct CappedQueue {
 
 template <typename T>
 struct CappedQueueSender {
+    // Prepares a sender with preallocated semaphore slots.
     CappedQueueSender(CappedQueue<T>& q)
         : queue(q), num_threads(q.queues.size()) {
         slots_to_write = queue.semaphore.waitMany(SEMAPHORE_BLOCK_SIZE);
     }
 
+    // Enqueues an item for a target thread.
     void send_item(int target_thread_id, T&& item) {
         if (slots_to_write == 0) {
             slots_to_write = queue.semaphore.waitMany(SEMAPHORE_BLOCK_SIZE);
@@ -235,6 +254,7 @@ struct CappedQueueSender {
         queue.queues[target_thread_id].enqueue({std::move(item)});
     }
 
+    // Signals end-of-stream to all queues.
     ~CappedQueueSender() {
         for (auto& queue : queue.queues) {
             queue.enqueue(std::nullopt);
@@ -249,6 +269,7 @@ struct CappedQueueSender {
 
 template <typename T>
 struct CappedQueueReceiver {
+    // Prepares a receiver for a specific thread queue.
     CappedQueueReceiver(CappedQueue<T>& q, int tid)
         : queue(q),
           thread_id(tid),
@@ -257,6 +278,7 @@ struct CappedQueueReceiver {
           c_tok(q.queues[tid]),
           num_threads(q.queues.size()) {}
 
+    // Receives the next item or returns false when all senders finish.
     bool get_item(T& item) {
         if (num_read == SEMAPHORE_BLOCK_SIZE) {
             queue.semaphore.signal(num_read);
@@ -281,6 +303,7 @@ struct CappedQueueReceiver {
         abort();
     }
 
+    // Releases any outstanding semaphore slots on destruction.
     ~CappedQueueReceiver() { queue.semaphore.signal(num_read); }
 
     CappedQueue<T>& queue;
@@ -292,6 +315,7 @@ struct CappedQueueReceiver {
 };
 
 struct SharedFile {
+    // Opens a shared output file with thread coordination.
     SharedFile(const std::filesystem::path& path, int nt)
         : num_threads(nt),
           cvs(num_threads),
@@ -300,6 +324,7 @@ struct SharedFile {
           next_shard(0) {}
 
     template <typename F>
+    // Runs a write on the shared file in shard order.
     void run_with_file(size_t requested_shard, F func) {
         size_t thread_index = requested_shard % num_threads;
         std::unique_lock<std::mutex> lock(mutex);
@@ -320,6 +345,7 @@ struct SharedFile {
     size_t next_shard;
 };
 
+// Sorts shard entries and concatenates them into the shared file.
 void sort_concatenate_shards(int i, const std::filesystem::path& root_path,
                              SharedFile& data_file, int num_subjects_per_shard,
                              int num_shards_per_thread) {
@@ -377,6 +403,7 @@ void sort_concatenate_shards(int i, const std::filesystem::path& root_path,
     }
 }
 
+// Estimates the number of shards for a given dataset size.
 size_t get_num_shards(int num_threads, size_t estimated_size) {
     int max_size_per_shard = 2000000000;
     int num_shards =
@@ -391,6 +418,7 @@ size_t get_num_shards(int num_threads, size_t estimated_size) {
     return num_shards;
 }
 
+// Writes queued shard entries to per-thread files.
 void write_files(
     int thread_index, const std::filesystem::path& root_path,
     int num_subjects_per_shard, int shards_per_thread,
@@ -420,6 +448,7 @@ void write_files(
     }
 }
 
+// Extracts property types and column indices from a Parquet schema.
 std::map<std::string, std::pair<std::shared_ptr<arrow::DataType>, int64_t>>
 get_properties(const parquet::arrow::SchemaManifest& manifest) {
     std::map<std::string, std::pair<std::shared_ptr<arrow::DataType>, int64_t>>
@@ -448,6 +477,7 @@ get_properties(const parquet::arrow::SchemaManifest& manifest) {
     return result;
 }
 
+// Extracts property names and types from a Parquet schema.
 std::map<std::string, std::shared_ptr<arrow::DataType>> get_property_types(
     const parquet::arrow::SchemaManifest& manifest) {
     std::map<std::string, std::shared_ptr<arrow::DataType>> result;
@@ -459,6 +489,7 @@ std::map<std::string, std::shared_ptr<arrow::DataType>> get_property_types(
     return result;
 }
 
+// Compares two property-type maps for equality.
 bool are_maps_equivalent(
     const std::map<std::string, std::shared_ptr<arrow::DataType>>& a,
     const std::map<std::string, std::shared_ptr<arrow::DataType>>& b) {
@@ -482,6 +513,7 @@ bool are_maps_equivalent(
 
 typedef std::pair<std::filesystem::path, size_t> WorkEntry;
 
+// Reads parquet files and returns property metadata and work entries.
 std::pair<std::vector<std::pair<std::string, std::shared_ptr<arrow::DataType>>>,
           std::vector<WorkEntry>>
 read_files(std::filesystem::path root_directory, int num_threads) {
@@ -539,6 +571,7 @@ read_files(std::filesystem::path root_directory, int num_threads) {
 std::set<std::string> known_properties = {"code", "numeric_value"};
 
 template <typename F, typename A>
+// Iterates string values and emits encoded subject data.
 void iterate_strings_helper(
     const std::filesystem::path& filename, const std::string& property_name,
     const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
@@ -723,6 +756,7 @@ void iterate_strings_helper(
 }
 
 template <typename F>
+// Dispatches string iteration based on Arrow string type.
 void iterate_strings(
     const std::filesystem::path& filename, const std::string& property_name,
 
@@ -750,6 +784,7 @@ void iterate_strings(
 }
 
 template <typename A>
+// Reads string properties in a worker thread and counts values.
 void string_reader_thread_helper(
     const std::filesystem::path& filename, const std::string& property_name,
     const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
@@ -844,6 +879,7 @@ void string_reader_thread_helper(
     }
 }
 
+// Dispatches string reading based on Arrow string type.
 void string_reader_thread(
     const std::filesystem::path& filename, const std::string& property_name,
     const std::shared_ptr<arrow::DataType>& type,
@@ -865,6 +901,7 @@ void string_reader_thread(
     };
 }
 
+// Writes string dictionary shards from a queue.
 void string_writer_thread(
     std::filesystem::path folder_to_write_to,
     CappedQueueReceiver<std::pair<std::string, uint64_t>>& receiver) {
@@ -930,6 +967,7 @@ void string_writer_thread(
     }
 }
 
+// Merges per-thread dictionary shards into a sorted list.
 std::vector<std::pair<uint64_t, std::string>> merger_thread(
     std::filesystem::path folder_to_merge) {
     auto context_deleter = [](ZSTD_DCtx* context) { ZSTD_freeDCtx(context); };
@@ -1005,6 +1043,7 @@ std::vector<std::pair<uint64_t, std::string>> merger_thread(
 }
 
 template <typename F>
+// Runs a function across work entries using a thread pool.
 void run_all(const std::vector<WorkEntry>& work_entries, int num_threads,
              F func) {
     std::vector<std::thread> threads;
@@ -1037,6 +1076,7 @@ void run_all(const std::vector<WorkEntry>& work_entries, int num_threads,
 }
 
 template <typename I, typename R, typename W>
+// Runs reader and writer stages connected by a capped queue.
 void run_reader_writer(const std::vector<WorkEntry>& work_entries,
                        int num_threads, R reader, W writer) {
     CappedQueue<I> queue(num_threads);
@@ -1079,6 +1119,7 @@ void run_reader_writer(const std::vector<WorkEntry>& work_entries,
 }
 
 template <typename F>
+// Samples encoded data across work entries and estimates size.
 std::pair<std::vector<std::vector<char>>, size_t> get_samples(
     std::filesystem::path filename,
     const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
@@ -1107,6 +1148,7 @@ std::pair<std::vector<std::vector<char>>, size_t> get_samples(
 }
 
 template <typename F>
+// Reads parquet files and writes compressed shards via a sender.
 void read_files(
     const std::filesystem::path& filename,
     const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
@@ -1163,6 +1205,7 @@ void read_files(
 }
 
 template <typename I>
+// Processes a property by sampling, dictionarying, and writing shards.
 void process_generic_property(
     const std::filesystem::path& string_path, const std::string& property_name,
     const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>&
@@ -1270,6 +1313,7 @@ void process_generic_property(
     }
 }
 
+// Processes a string property with dictionary building and encoding.
 void process_string_property(
     const std::string& property_name,
     const std::shared_ptr<arrow::DataType>& type,
@@ -1385,6 +1429,7 @@ void process_string_property(
 }
 
 template <typename F>
+// Iterates primitive values and emits encoded subject data.
 void iterate_primitive(
     std::filesystem::path filename, std::string property_name,
     const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
@@ -1531,6 +1576,7 @@ void iterate_primitive(
     }
 }
 
+// Processes a primitive property via the generic pipeline.
 void process_primitive_property(
     const std::string& property_name,
     const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>&
@@ -1554,6 +1600,7 @@ void process_primitive_property(
 }
 
 template <typename F>
+// Iterates timestamp values and emits encoded subject data.
 void iterate_time(
     std::filesystem::path filename, std::string property_name,
     const std::vector<std::pair<uint32_t, uint32_t>>& subject_positions,
@@ -1740,6 +1787,7 @@ void iterate_time(
     }
 }
 
+// Processes a time property via the generic pipeline.
 void process_time_property(
     const std::string& property_name,
     const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>&
@@ -1761,6 +1809,7 @@ void process_time_property(
                              work_entries, num_threads, num_subjects, iterate);
 }
 
+// Reads subject ids and lengths from a parquet file.
 std::vector<std::pair<int64_t, uint32_t>> get_subject_ids(
     std::filesystem::path filename) {
     arrow::MemoryPool* pool = arrow::default_memory_pool();
@@ -1847,6 +1896,7 @@ std::vector<std::pair<int64_t, uint32_t>> get_subject_ids(
     return result;
 }
 
+// Collects subject id lists for each input file.
 std::vector<std::vector<std::pair<int64_t, uint32_t>>> process_subject_id(
     std::filesystem::path temp_path, const std::vector<WorkEntry>& work_entries,
     int num_threads) {
@@ -1861,6 +1911,7 @@ std::vector<std::vector<std::pair<int64_t, uint32_t>>> process_subject_id(
     return result;
 }
 
+// Converts an Arrow data type to an internal DataType.
 DataType convert_to_datatype(const std::shared_ptr<arrow::DataType>& type) {
     switch (type->id()) {
         case arrow::Type::STRING:
@@ -1904,6 +1955,7 @@ DataType convert_to_datatype(const std::shared_ptr<arrow::DataType>& type) {
     abort();
 }
 
+// Dispatches property processing based on Arrow type.
 void process_property(
     const std::string& property_name,
     const std::shared_ptr<arrow::DataType>& type,
@@ -1951,6 +2003,7 @@ void process_property(
 }
 
 template <typename F>
+// Runs a function on subject id ranges across threads.
 void run_all_simple(int num_subjects, int num_threads, F func) {
     std::vector<std::thread> threads;
 
@@ -1969,9 +2022,11 @@ void run_all_simple(int num_subjects, int num_threads, F func) {
     }
 }
 
+// Releases a ZSTD decompression context.
 auto context_deleter = [](ZSTD_DCtx* context) { ZSTD_freeDCtx(context); };
 
 struct PropertyNullReader {
+    // Prepares a reader for property null maps.
     PropertyNullReader(const std::filesystem::path& property_path,
                        std::string property_name, MmapFile& zf, MmapFile& df)
         : zdict_file(zf),
@@ -1991,6 +2046,7 @@ struct PropertyNullReader {
     std::vector<char> decompressed;
     std::vector<uint32_t> values;
 
+    // Returns a null bitmap for a subject.
     std::vector<uint64_t> get_null_bytes(int32_t subject_offset,
                                          int32_t length) {
         uint64_t offset = data_file.data<uint64_t>()[subject_offset];
@@ -2073,6 +2129,7 @@ struct PropertyNullReader {
 };
 
 template <typename T, typename F>
+// Iterates combined null maps across properties for subject ranges.
 void iterate_null_map(std::vector<PropertyNullReader>& readers,
                       absl::Span<const int32_t> length_map, int32_t start,
                       int32_t end, F func) {
@@ -2112,6 +2169,7 @@ void iterate_null_map(std::vector<PropertyNullReader>& readers,
 }
 
 template <typename T>
+// Samples combined null maps across subjects.
 std::vector<std::vector<char>> get_null_map_samples(
     std::vector<PropertyNullReader>& readers,
     absl::Span<const int32_t> length_map, int32_t start, int32_t end,
@@ -2137,6 +2195,7 @@ std::vector<std::vector<char>> get_null_map_samples(
 }
 
 template <typename T>
+// Writes the combined null map data to disk with compression.
 std::pair<size_t, std::vector<uint64_t>> write_null_map(
     std::vector<PropertyNullReader>& readers,
     absl::Span<const int32_t> length_map, int32_t start, int32_t end,
@@ -2204,6 +2263,7 @@ std::pair<size_t, std::vector<uint64_t>> write_null_map(
 }
 
 template <typename T>
+// Generates a combined null map property for all subjects.
 void process_null_map(
     const std::vector<std::pair<std::string, std::shared_ptr<arrow::DataType>>>&
         properties,
@@ -2346,6 +2406,7 @@ void process_null_map(
 
 }  // namespace
 
+// Creates a meds_reader database from a MEDS dataset.
 void create_database(const char* source, const char* destination,
                      int num_threads) {
     std::filesystem::path source_path(source);

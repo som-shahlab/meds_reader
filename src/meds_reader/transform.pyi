@@ -8,6 +8,7 @@ import meds_reader
 class MutableSubject(meds_reader.Subject):
     """A subject consists of a subject_id and a sequence of Events"""
 
+    # Initializes a mutable subject with an id and events.
     def __init__(self, subject_id, events: List[MutableEvent] = []): ...
 
     subject_id: int
@@ -19,6 +20,7 @@ class MutableSubject(meds_reader.Subject):
 class MutableEvent(meds_reader.Event):
     """An event represents a single unit of information about a subject. It contains a time and code, and potentially more properties."""
 
+    # Initializes an event with core fields and extra properties.
     def __init__(self, time: datetime.datetime, code: str, properties: Dict[str, Any] = {}): ...
 
     time: datetime.datetime
@@ -27,17 +29,22 @@ class MutableEvent(meds_reader.Event):
     code: str
     "An identifier for the type of event that occured"
 
+    # Looks up a dynamic property by name.
     def __getattr__(self, name: str) -> Any:
         """Events can contain arbitrary additional properties. This retrieves the specified property, or returns None"""
         ...
 
+    # Sets a dynamic property on the event.
     def __setattr__(self, name: str, value: Any) -> None:
         """Assign an arbitrary property to this event."""
         ...
 
+    # Iterates over stored event properties.
     def __iter__(self) -> Iterator[Tuple[str, Any]]:
         """Iterate over all non-None properties within this event."""
+        ...
 
+# Transforms a MEDS dataset into a new dataset with a given function.
 def transform_meds_dataset(
     source_dataset_path: str,
     target_dataset_path: str,

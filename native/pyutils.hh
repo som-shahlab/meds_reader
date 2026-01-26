@@ -1,3 +1,7 @@
+// Utility helpers for bridging C++ with the Python C API.
+//
+// This header provides wrappers that translate C++ exceptions into
+// Python errors, and RAII helpers for PyObject reference management.
 #pragma once
 
 #define PY_SSIZE_T_CLEAN
@@ -13,11 +17,14 @@
 #define FORCE_INLINE inline __attribute__((always_inline))
 #endif
 
+// Returns a null pointer to signal a Python error.
 inline PyObject* return_error(PyObject**) { return nullptr; }
 
+// Returns -1 to signal a Python error.
 inline Py_ssize_t return_error(Py_ssize_t*) { return -1; }
 
 template <typename T, typename R, typename... Args>
+// Invokes a member function and translates C++ exceptions to Python errors.
 FORCE_INLINE R convert(R (T::*mf)(Args...),
                                                 PyObject* obj, Args&&... args) {
 #ifndef NDEBUG
@@ -35,6 +42,7 @@ FORCE_INLINE R convert(R (T::*mf)(Args...),
 }
 
 template <typename R, typename... Args>
+// Invokes a free function and translates C++ exceptions to Python errors.
 FORCE_INLINE R convert(R (*mf)(Args...),
                                                 Args&&... args) {
     try {
@@ -46,6 +54,7 @@ FORCE_INLINE R convert(R (*mf)(Args...),
 }
 
 template <typename T, typename... Args>
+// Invokes a member function returning void with error translation.
 FORCE_INLINE void convert_void(void (T::*mf)(Args...),
                                                         PyObject* obj,
                                                         Args&&... args) {
@@ -61,6 +70,7 @@ FORCE_INLINE void convert_void(void (T::*mf)(Args...),
 }
 
 template <auto actual_mf, typename T, typename R, typename... Args>
+// Wraps a void-returning member function for Python C API calls.
 decltype(auto) helper(R (T::*mf)(Args...),
                       std::enable_if_t<std::is_void<R>::value>*) {
     return [](PyObject* arg, Args... args) -> void {
@@ -69,6 +79,7 @@ decltype(auto) helper(R (T::*mf)(Args...),
 }
 
 template <auto actual_mf, typename T, typename R, typename... Args>
+// Wraps a value-returning member function for Python C API calls.
 decltype(auto) helper(R (T::*mf)(Args...),
                       std::enable_if_t<!std::is_void<R>::value>*) {
     return [](PyObject* arg, Args... args) -> R {
@@ -77,6 +88,7 @@ decltype(auto) helper(R (T::*mf)(Args...),
 }
 
 template <auto actual_mf, typename R, typename... Args>
+// Wraps a value-returning free function for Python C API calls.
 decltype(auto) helper(R (*mf)(Args...),
                       std::enable_if_t<!std::is_void<R>::value>*) {
     return [](Args... args) -> R {
@@ -85,45 +97,55 @@ decltype(auto) helper(R (*mf)(Args...),
 }
 
 template <auto mf>
+// Converts a function pointer into a Python-compatible trampoline.
 decltype(auto) convert_to_cfunc() {
     return helper<mf>(mf, nullptr);
 }
 
 struct PyObjectWrapper {
+    // Initializes with a null Python reference.
     PyObjectWrapper() : ref(nullptr) {}
+    // Takes ownership of a Python reference.
     explicit PyObjectWrapper(PyObject* obj) : ref(obj) {}
 
     PyObjectWrapper(const PyObjectWrapper& other) = delete;
 
+    // Moves ownership of the Python reference.
     PyObjectWrapper(PyObjectWrapper&& other) {
         ref = other.ref;
         other.ref = nullptr;
     }
 
+    // Replaces the owned reference with a new object.
     PyObjectWrapper& operator=(PyObject* obj) {
         Py_XDECREF(ref);
         ref = obj;
         return *this;
     }
 
+    // Moves ownership from another wrapper.
     PyObjectWrapper& operator=(PyObjectWrapper&& other) noexcept {
         std::swap(ref, other.ref);
         return *this;
     }
 
+    // Returns the borrowed reference without modifying refcounts.
     PyObject* borrow() { return ref; }
 
+    // Returns a new owned reference to the object.
     PyObject* copy() {
         Py_INCREF(ref);
         return ref;
     }
 
+    // Releases ownership and returns the raw pointer.
     PyObject* steal() {
         PyObject* result = ref;
         ref = nullptr;
         return result;
     }
 
+    // Decrements the owned reference on destruction.
     ~PyObjectWrapper() { Py_XDECREF(ref); }
 
     PyObject* ref;

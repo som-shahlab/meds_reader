@@ -1,8 +1,13 @@
+// CLI entry point for converting MEDS datasets.
+//
+// This file parses command-line arguments and delegates to the native
+// database conversion routine to create a meds_reader dataset.
 #include <CLI/CLI.hpp>
 #include <iostream>
 
 #include "create_database.hh"
 
+// Parses arguments and runs dataset conversion.
 int main(int argc, char** argv) {
     CLI::App app{
         "meds_reader_convert is a program for converting a MEDS dataset to a "

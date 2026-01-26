@@ -1,3 +1,9 @@
+// Implements filtering for meds_reader databases by subject id.
+//
+// This file loads a list of subject ids, maps them to offsets in an
+// existing database, and copies only the referenced slices of each
+// property file into a new database directory. It preserves metadata
+// and rebuilds subject id/length tables to match the filtered subset.
 #include "filter_database.hh"
 
 #include <cstring>
@@ -12,6 +18,7 @@
 
 namespace {
 
+// Copies selected entries from a byte-offset table into a new file.
 void copy_subset(const std::filesystem::path& source_path,
                  const std::filesystem::path& destination_path,
                  const std::vector<size_t>& offsets) {
@@ -54,6 +61,7 @@ void copy_subset(const std::filesystem::path& source_path,
     }
 }
 
+// Copies a property directory for selected subject offsets.
 void filter_database_property(const std::filesystem::path& source_path,
                               const std::filesystem::path& destination_path,
                               const std::vector<size_t>& offsets,
@@ -81,6 +89,7 @@ void filter_database_property(const std::filesystem::path& source_path,
 
 }  // namespace
 
+// Filters a meds_reader database to the subject ids in a file.
 void filter_database(const char* source, const char* destination,
                      const char* subject_ids_file, int num_threads) {
     std::filesystem::path source_path(source);

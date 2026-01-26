@@ -1,3 +1,9 @@
+// Implements the Python extension types for meds_reader.
+//
+// This file defines the SubjectDatabase, Subject, Event, and iterator
+// types exposed to Python. It wires those types to the underlying
+// on-disk data by mapping files, lazily decoding properties, and
+// providing Python protocol hooks for iteration, indexing, and attrs.
 #include <filesystem>
 #include <optional>
 
@@ -372,8 +378,10 @@ PyTypeObject Event::Type = {
     .tp_free = nullptr,
 };
 
+// Initializes an unused SubjectEventsIterator.
 SubjectEventsIterator::SubjectEventsIterator() { in_use = false; }
 
+// Initializes the iterator with a SubjectEvents container.
 void SubjectEventsIterator::init(SubjectEvents* e) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
 
@@ -385,11 +393,13 @@ void SubjectEventsIterator::init(SubjectEvents* e) {
     event_index = 0;
 }
 
+// Releases iterator references on destruction.
 void SubjectEventsIterator::dealloc() {
     in_use = false;
     Py_DECREF(events);
 }
 
+// Returns the next event or StopIteration.
 inline PyObject* SubjectEventsIterator::next() {
     if (event_index == subject_length) {
         return PyErr_Format(PyExc_StopIteration,
@@ -402,11 +412,13 @@ inline PyObject* SubjectEventsIterator::next() {
     }
 }
 
+// Returns the iterator itself for Python iteration.
 PyObject* SubjectEventsIterator::iter() {
     Py_INCREF(this);
     return this;
 }
 
+// Initializes a SubjectEvents wrapper for a subject.
 void SubjectEvents::init(Subject* p, Event* e, int pl) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
 
@@ -423,6 +435,7 @@ void SubjectEvents::init(Subject* p, Event* e, int pl) {
     }
 }
 
+// Returns an iterator over events with reuse when possible.
 inline PyObject* SubjectEvents::iter() {
     size_t desired_index = iterators.size();
 
@@ -442,8 +455,10 @@ inline PyObject* SubjectEvents::iter() {
     return iterators.data() + desired_index;
 }
 
+// Returns the number of events in the subject.
 inline Py_ssize_t SubjectEvents::length() { return subject_length; }
 
+// Provides indexed or sliced access to events.
 inline PyObject* SubjectEvents::subscript(PyObject* event_index) {
     if (PyLong_Check(event_index)) {
         Py_ssize_t event_index_integer = PyLong_AsSsize_t(event_index);
@@ -495,6 +510,7 @@ inline PyObject* SubjectEvents::subscript(PyObject* event_index) {
     }
 }
 
+// Deallocates event references and releases the subject.
 void SubjectEvents::dealloc() {
     for (int i = 0; i < subject_length; i++) {
         Py_DECREF(static_cast<PyObject*>(events + i));
@@ -504,6 +520,7 @@ void SubjectEvents::dealloc() {
     subject->decref();
 }
 
+// Builds a string representation of the events container.
 PyObject* SubjectEvents::str() {
     int64_t subject_id_val = PyLong_AsLongLong(subject->subject_id);
 
@@ -523,6 +540,7 @@ PyObject* SubjectEvents::str() {
     return py_string;
 }
 
+// Computes aligned offsets and total size for a Subject allocation.
 std::tuple<size_t, size_t, size_t, size_t> align_and_size_subject(
     int32_t num_properties, int32_t capacity) {
     constexpr size_t event_alignment = alignof(Event);
@@ -568,6 +586,7 @@ std::tuple<size_t, size_t, size_t, size_t> align_and_size_subject(
     return {event_offset, null_map_offset, property_offset, total_size};
 }
 
+// Constructs a Subject with storage pointers into an arena buffer.
 Subject::Subject(SubjectDatabase* pd, size_t c, char* data)
     : subject_database(pd), capacity(c), in_use(false) {
     auto info = align_and_size_subject(pd->get_num_properties(), capacity);
@@ -582,8 +601,10 @@ Subject::Subject(SubjectDatabase* pd, size_t c, char* data)
     saved_properties = reinterpret_cast<PyObject**>(data + std::get<2>(info));
 }
 
+// Default destructor for Subject.
 Subject::~Subject() {}
 
+// Looks up a property by name for a given event.
 inline PyObject* Subject::get_property(PyObject* property_name,
                                        Event* event_ptr) {
     // Needs to get the property
@@ -599,6 +620,7 @@ inline PyObject* Subject::get_property(PyObject* property_name,
     return get_property(index, event_ptr);
 };
 
+// Looks up a property by index for a given event.
 inline PyObject* Subject::get_property(size_t index, Event* event_ptr) {
     size_t event_index = event_ptr - events;
 
@@ -622,6 +644,7 @@ inline PyObject* Subject::get_property(size_t index, Event* event_ptr) {
     }
 };
 
+// Returns the null-map bitset for an event.
 uint64_t Subject::get_null_map(Event* event_ptr) {
     size_t event_index = event_ptr - events;
 
@@ -634,6 +657,7 @@ uint64_t Subject::get_null_map(Event* event_ptr) {
     return null_map[event_index];
 }
 
+// Allocates and constructs a Subject with aligned storage.
 Subject* Subject::create(SubjectDatabase* pd, size_t capacity) {
     constexpr size_t property_alignment = alignof(PyObject*);
     constexpr size_t event_alignment = alignof(Event);
@@ -656,6 +680,7 @@ Subject* Subject::create(SubjectDatabase* pd, size_t capacity) {
     return casted_data;
 }
 
+// Initializes a Subject instance with ids and event storage.
 void Subject::init(int32_t po, int32_t pl, PyObject* pid_object) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
 
@@ -677,17 +702,20 @@ void Subject::init(int32_t po, int32_t pl, PyObject* pid_object) {
     events_obj.init(this, events, subject_length);
 }
 
+// Returns the subject id as a Python object.
 inline PyObject* Subject::get_subject_id(void*) {
     Py_INCREF(subject_id);
     return subject_id;
 }
 
+// Returns the SubjectEvents view for this subject.
 inline PyObject* Subject::get_events(void*) {
     PyObject* result = static_cast<PyObject*>(&events_obj);
     Py_INCREF(result);
     return result;
 }
 
+// Deallocates a Subject by releasing Python references.
 void Subject::dealloc() {
     if (!in_use) {
         throw std::runtime_error(
@@ -699,6 +727,7 @@ void Subject::dealloc() {
     decref();
 }
 
+// Clears cached properties and releases database references.
 void Subject::delete_self() {
     for (size_t p_index = 0; p_index < subject_database->get_num_properties();
          p_index++) {
@@ -722,6 +751,7 @@ void Subject::delete_self() {
     subject_database->decref();
 }
 
+// Builds a string representation of the subject.
 PyObject* Subject::str() {
     int64_t subject_id_val = PyLong_AsLongLong(subject_id);
 
@@ -741,6 +771,7 @@ PyObject* Subject::str() {
     return py_string;
 }
 
+// Returns an iterator over an event's properties.
 PyObject* Subject::create_event_property_iterator(Event* event) {
     size_t desired_index = event_property_iterators.size();
 
@@ -760,14 +791,17 @@ PyObject* Subject::create_event_property_iterator(Event* event) {
                                   desired_index);
 }
 
+// Initializes an event with a parent subject.
 void Event::init(Subject* p) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
     subject = p;
     subject->incref();
 }
 
+// Releases the subject reference for this event.
 void Event::dealloc() { subject->decref(); }
 
+// Retrieves a property via the parent subject.
 inline PyObject* Event::getattro(PyObject* key) {
     Py_INCREF(key);
     PyObjectWrapper key_wrapper(key);
@@ -776,10 +810,12 @@ inline PyObject* Event::getattro(PyObject* key) {
     return subject->get_property(key_wrapper.borrow(), this);
 }
 
+// Returns an iterator over event properties.
 PyObject* Event::iter() {
     return subject->create_event_property_iterator(this);
 }
 
+// Builds a string representation of the event.
 PyObject* Event::str() {
     PyObjectWrapper time_str{PyUnicode_FromString("time")};
     PyObjectWrapper code_str{PyUnicode_FromString("code")};
@@ -805,8 +841,10 @@ PyObject* Event::str() {
     return py_string;
 }
 
+// Initializes an unused EventPropertyIterator.
 EventPropertyIterator::EventPropertyIterator() { in_use = false; }
 
+// Initializes the iterator for a specific event.
 void EventPropertyIterator::init(Subject* pd, Event* e) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
     subject = pd;
@@ -819,11 +857,13 @@ void EventPropertyIterator::init(Subject* pd, Event* e) {
     current_index = subject->get_null_map(e);
 }
 
+// Releases references on iterator destruction.
 void EventPropertyIterator::dealloc() {
     in_use = false;
     subject->decref();
 }
 
+// Returns the next (property_name, property_value) tuple.
 inline PyObject* EventPropertyIterator::next() {
     if (current_index == 0) {
         return PyErr_Format(PyExc_StopIteration,
@@ -847,11 +887,13 @@ inline PyObject* EventPropertyIterator::next() {
     }
 }
 
+// Returns the iterator itself for Python iteration.
 PyObject* EventPropertyIterator::iter() {
     Py_INCREF(this);
     return this;
 }
 
+// Opens a database from a directory on disk.
 SubjectDatabase::SubjectDatabase(std::string_view dir)
     : root_directory(dir),
       subject_id_file(root_directory / "subject_id"),
@@ -929,6 +971,7 @@ SubjectDatabase::SubjectDatabase(std::string_view dir)
     num_subjects = subject_id_file.data<int64_t>().size();
 }
 
+// Releases cached subjects and validates no active users remain.
 SubjectDatabase::~SubjectDatabase() {
     for (Subject* subject : subjects) {
         if (subject->in_use) {
@@ -940,17 +983,21 @@ SubjectDatabase::~SubjectDatabase() {
     }
 }
 
+// Returns the number of properties in the database.
 size_t SubjectDatabase::get_num_properties() { return properties.size(); }
 
+// Returns the Python name for a property by index.
 PyObject* SubjectDatabase::get_property_name(size_t property_name_index) {
     return property_names[property_name_index].copy();
 }
 
+// Returns the property index for a Python name object.
 int64_t SubjectDatabase::get_property_index(PyObject* property_name) {
     PyUnicode_InternInPlace(&property_name);
     return property_map->get_index(property_name);
 }
 
+// Loads property data for a subject into output buffers.
 size_t SubjectDatabase::get_property_data(size_t index, int32_t subject_offset,
                                           int32_t length, PyObject** result,
                                           PyObject** allocated) {
@@ -962,6 +1009,7 @@ size_t SubjectDatabase::get_property_data(size_t index, int32_t subject_offset,
                                                         result, allocated);
 }
 
+// Loads the combined null map for a subject.
 void SubjectDatabase::get_null_map(int32_t subject_offset, int32_t length,
                                    uint64_t* result) {
     if (!null_map_reader) {
@@ -971,14 +1019,17 @@ void SubjectDatabase::get_null_map(int32_t subject_offset, int32_t length,
     null_map_reader->get_null_map(subject_offset, length, result);
 }
 
+// Returns the subject id at a given offset.
 int64_t SubjectDatabase::get_subject_id(int32_t subject_offset) const {
     return subject_id_file.data<int64_t>()[subject_offset];
 }
 
+// Returns the subject length at a given offset.
 uint32_t SubjectDatabase::get_subject_length(int32_t subject_offset) const {
     return length_file.data<uint32_t>()[subject_offset];
 }
 
+// Maps a subject id to a subject offset if present.
 std::optional<int32_t> SubjectDatabase::get_subject_offset(int64_t subject_id) {
     if (!subject_offset_map) {
         subject_offset_map.emplace();
@@ -1001,10 +1052,12 @@ std::optional<int32_t> SubjectDatabase::get_subject_offset(int64_t subject_id) {
     }
 }
 
+// Returns a Python dict of property names to dtypes.
 PyObject* SubjectDatabase::get_properties(void*) {
     return py_properties.copy();
 }
 
+// Allocates a new SubjectDatabase from Python arguments.
 PyObject* SubjectDatabase::create(PyTypeObject* type, PyObject* args,
                                   PyObject* kwds) {
     if (type != &Type) {
@@ -1032,8 +1085,10 @@ PyObject* SubjectDatabase::create(PyTypeObject* type, PyObject* args,
     return static_cast<PyObject*>(database);
 }
 
+// Returns the number of subjects in the database.
 Py_ssize_t SubjectDatabase::length() { return num_subjects; }
 
+// Returns a Subject for a given subject id.
 inline PyObject* SubjectDatabase::subscript(PyObject* subject_id) {
     if (!PyLong_Check(subject_id)) {
         return PyErr_Format(
@@ -1081,6 +1136,7 @@ inline PyObject* SubjectDatabase::subscript(PyObject* subject_id) {
     return subjects[index_to_use];
 }
 
+// Builds a string representation of the database.
 PyObject* SubjectDatabase::str() {
     std::string path = root_directory.string();
 
@@ -1098,8 +1154,10 @@ PyObject* SubjectDatabase::str() {
     return py_string;
 }
 
+// Initializes an unused SubjectDatabaseIterator.
 SubjectDatabaseIterator::SubjectDatabaseIterator() { in_use = false; }
 
+// Initializes the iterator for a database.
 void SubjectDatabaseIterator::init(SubjectDatabase* database) {
     PyObject_Init(static_cast<PyObject*>(this), &Type);
 
@@ -1109,11 +1167,13 @@ void SubjectDatabaseIterator::init(SubjectDatabase* database) {
     in_use = true;
 }
 
+// Releases references on iterator destruction.
 void SubjectDatabaseIterator::dealloc() {
     in_use = false;
     subject_database->decref();
 }
 
+// Returns the next subject id or StopIteration.
 PyObject* SubjectDatabaseIterator::next() {
     if (index >= subject_database->num_subjects) {
         return PyErr_Format(PyExc_StopIteration,
@@ -1129,6 +1189,7 @@ PyObject* SubjectDatabaseIterator::next() {
     return result;
 }
 
+// Returns an iterator over subject ids.
 PyObject* SubjectDatabase::iter() {
     size_t desired_index = subject_database_iterators.size();
 
@@ -1154,6 +1215,7 @@ struct PyModuleDef meds_reader_module = {
 
 }  // namespace
 
+// Initializes the meds_reader Python module.
 PyMODINIT_FUNC PyInit__meds_reader(void) {
     PyDateTime_IMPORT;
 
