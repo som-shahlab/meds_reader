@@ -215,6 +215,55 @@ def test_properties(subject_database):
     }
 
 
+# Verifies struct columns are ignored instead of aborting conversion.
+def test_complex_columns_are_ignored(tmpdir: str):
+    meds_dir = os.path.join(tmpdir, "meds")
+    data_dir = os.path.join(meds_dir, "data")
+    os.makedirs(os.path.join(meds_dir, "metadata"))
+    os.mkdir(data_dir)
+
+    with open(os.path.join(meds_dir, "metadata", "dataset.json"), "w") as f:
+        json.dump(metadata, f)
+
+    table = pa.Table.from_pylist(
+        [
+            {
+                "subject_id": 1,
+                "time": datetime.datetime(2020, 1, 1),
+                "code": "A",
+                "numeric_value": 1.0,
+                "code_components": {"gender": "F", "race_concept_id": 5},
+            }
+        ],
+        schema=pa.schema(
+            [
+                ("subject_id", pa.int64()),
+                ("time", pa.timestamp("us")),
+                ("code", pa.string()),
+                ("numeric_value", pa.float32()),
+                (
+                    "code_components",
+                    pa.struct([("gender", pa.string()), ("race_concept_id", pa.int64())]),
+                ),
+            ]
+        ),
+    )
+    pq.write_table(table, os.path.join(data_dir, "entries.parquet"))
+
+    meds_reader_dir = os.path.join(tmpdir, "meds_reader")
+    result = subprocess.run(
+        ["meds_reader_convert", meds_dir, meds_reader_dir, "--num_threads", "1"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "meds_reader ignoring non-leaf property: code_components" in result.stderr
+    database = meds_reader.SubjectDatabase(str(meds_reader_dir))
+    assert "code_components" not in database.properties
+    assert database[1].events[0].code == "A"
+
+
 # Verifies missing event properties raise errors.
 def test_missing_property(subject_database):
     p = subject_database[32]

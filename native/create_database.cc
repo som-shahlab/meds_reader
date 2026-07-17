@@ -461,8 +461,16 @@ get_properties(const parquet::arrow::SchemaManifest& manifest) {
 
     auto helper = [&](parquet::arrow::SchemaField& field) {
         if (!field.is_leaf()) {
-            throw std::runtime_error(
-                "meds_reader only supports leaf properties");
+            static std::mutex ignored_property_mutex;
+            static std::set<std::string> ignored_properties_logged;
+
+            const auto& name = field.field->name();
+            std::lock_guard<std::mutex> guard(ignored_property_mutex);
+            if (ignored_properties_logged.insert(name).second) {
+                std::cerr << "meds_reader ignoring non-leaf property: " << name
+                          << std::endl;
+            }
+            return;
         }
         result[field.field->name()] =
             std::make_pair(field.field->type(), field.column_index);
