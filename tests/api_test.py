@@ -444,6 +444,9 @@ def test_native_filter_bounds(tmpdir: str, subject_database):
         ],
         check=True,
     )
+    assert os.path.getsize(os.path.join(empty_database_path, "meds_reader.empty")) > 0
+    assert not os.path.exists(os.path.join(empty_database_path, "subject_id"))
+    assert not os.path.exists(os.path.join(empty_database_path, "meds_reader.length"))
     assert len(meds_reader.SubjectDatabase(empty_database_path)) == 0
 
     duplicate_ids_path = os.path.join(tmpdir, "duplicate_subject_ids")

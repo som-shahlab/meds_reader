@@ -18,9 +18,14 @@ inline std::string debug_me(std::string a){
 class MmapFile {
    public:
     // Opens a file by filesystem path.
-    MmapFile(const std::filesystem::path& path): MmapFile(path.string()) {}
+    MmapFile(const std::filesystem::path& path, bool allow_missing = false)
+        : MmapFile(path.string(), allow_missing) {}
     // Opens a file by string path and maps it into memory.
-    MmapFile(const std::string& path) {
+    MmapFile(const std::string& path, bool allow_missing = false) {
+        if (allow_missing && !std::filesystem::exists(path)) {
+            is_empty = true;
+            return;
+        }
         std::uintmax_t size = std::filesystem::file_size(path);
         if (size == 0) {
             is_empty = true;

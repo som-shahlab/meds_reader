@@ -900,8 +900,12 @@ PyObject* EventPropertyIterator::iter() {
 // Opens a database from a directory on disk.
 SubjectDatabase::SubjectDatabase(std::string_view dir)
     : root_directory(dir),
-      subject_id_file(root_directory / "subject_id"),
-      length_file(root_directory / "meds_reader.length") {
+      subject_id_file(
+          root_directory / "subject_id",
+          std::filesystem::exists(root_directory / "meds_reader.empty")),
+      length_file(
+          root_directory / "meds_reader.length",
+          std::filesystem::exists(root_directory / "meds_reader.empty")) {
     {
         PyObject_Init(static_cast<PyObject*>(this), &Type);
         PyObjectWrapper pyarrow{PyImport_ImportModule("pyarrow")};

@@ -12,47 +12,13 @@
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <system_error>
 #include <thread>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 #include "binary_version.hh"
 #include "mmap_file.hh"
 #include "pdqsort.h"
 
 namespace {
-
-// Creates an empty file and closes it before returning. The Windows standard
-// library did not reliably materialize an empty output file, so use the native
-// file API there.
-void create_empty_file(const std::filesystem::path& path) {
-#ifdef _WIN32
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE |
-                                  FILE_SHARE_DELETE,
-                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                              nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        throw std::system_error(GetLastError(), std::system_category(),
-                                "Could not create empty file " +
-                                    path.string());
-    }
-    if (!CloseHandle(file)) {
-        throw std::system_error(GetLastError(), std::system_category(),
-                                "Could not close empty file " +
-                                    path.string());
-    }
-#else
-    std::ofstream destination(path,
-                              std::ios_base::out | std::ios_base::binary |
-                                  std::ios_base::trunc);
-    destination.exceptions(std::ofstream::badbit | std::ofstream::failbit);
-    destination.close();
-#endif
-}
 
 // Copies selected entries from a byte-offset table into a new file.
 void copy_subset(const std::filesystem::path& source_path,
@@ -153,14 +119,15 @@ void filter_database(const char* source, const char* destination,
     std::filesystem::copy(source_path / "metadata",
                           destination_path / "metadata");
 
-    {
-        std::filesystem::path destination_subject_ids_path =
-            destination_path / "subject_id";
-        if (subject_ids.empty()) {
-            create_empty_file(destination_subject_ids_path);
-        } else {
+    if (subject_ids.empty()) {
+        std::ofstream empty_marker(destination_path / "meds_reader.empty");
+        empty_marker.exceptions(std::ofstream::badbit | std::ofstream::failbit);
+        empty_marker << "empty\n";
+        empty_marker.close();
+    } else {
+        {
             std::ofstream subject_ids_file(
-                destination_subject_ids_path,
+                destination_path / "subject_id",
                 std::ios_base::out | std::ios_base::binary |
                     std::ios_base::trunc);
             subject_ids_file.write((const char*)subject_ids.data(),
@@ -211,13 +178,9 @@ void filter_database(const char* source, const char* destination,
             subject_lengths.push_back(source_subject_lengths[offset]);
         }
 
-        std::filesystem::path destination_subject_lengths_path =
-            destination_path / "meds_reader.length";
-        if (subject_lengths.empty()) {
-            create_empty_file(destination_subject_lengths_path);
-        } else {
+        if (!subject_lengths.empty()) {
             std::ofstream subject_lengths_file(
-                destination_subject_lengths_path,
+                destination_path / "meds_reader.length",
                 std::ios_base::out | std::ios_base::binary |
                     std::ios_base::trunc);
             subject_lengths_file.write(
