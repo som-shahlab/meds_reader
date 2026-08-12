@@ -1,8 +1,27 @@
 # Clones vcpkg and installs Arrow for Windows builds.
+def _execute_or_fail(repository_ctx, arguments, timeout = 600, attempts = 1):
+  result = None
+  for _ in range(attempts):
+    result = repository_ctx.execute(arguments, timeout = timeout)
+    if result.return_code == 0:
+      return
+
+  fail("Command failed after {} attempt(s): {}\nstdout:\n{}\nstderr:\n{}".format(
+      attempts,
+      " ".join(arguments),
+      result.stdout,
+      result.stderr,
+  ))
+
 def _impl(repository_ctx):
-  repository_ctx.execute(["git", "clone", "https://github.com/microsoft/vcpkg.git"])
-  repository_ctx.execute(["./vcpkg/bootstrap-vcpkg.bat"])
-  repository_ctx.execute(["./vcpkg/vcpkg.exe", "install", "arrow:x64-windows-static-md"], timeout=6000)
+  _execute_or_fail(repository_ctx, ["git", "clone", "https://github.com/microsoft/vcpkg.git"])
+  _execute_or_fail(repository_ctx, ["./vcpkg/bootstrap-vcpkg.bat"], attempts = 2)
+  _execute_or_fail(
+      repository_ctx,
+      ["./vcpkg/vcpkg.exe", "install", "arrow:x64-windows-static-md"],
+      timeout = 6000,
+      attempts = 3,
+  )
 
   repository_ctx.file("BUILD", """
 load("@rules_cc//cc:defs.bzl", "cc_library")
