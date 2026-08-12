@@ -28,7 +28,9 @@ def prefetch_windows_virtualenv() -> None:
     if cache_path.exists():
         return
 
-    url = f"https://github.com/pypa/get-virtualenv/releases/download/{version}/virtualenv.pyz"
+    # PyPA documents this CDN endpoint for the zipapp. It avoids depending on
+    # GitHub release assets merely to start cibuildwheel.
+    url = "https://bootstrap.pypa.io/virtualenv.pyz"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = cache_path.with_suffix(".tmp")
 
