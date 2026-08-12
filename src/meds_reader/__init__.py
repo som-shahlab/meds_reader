@@ -10,6 +10,7 @@ import os
 import pickle
 import queue
 import random
+import subprocess
 import sys
 import traceback
 import warnings
@@ -105,7 +106,8 @@ def meds_reader_convert():
     for module in submodules.iterdir():
         if module.name.startswith("meds_reader_convert"):
             with importlib.resources.as_file(module) as executible:
-                os.execv(executible, sys.argv)
+                return subprocess.call([str(executible), *sys.argv[1:]])
+    raise RuntimeError("Could not find the packaged meds_reader_convert executable")
 
 
 # Launches the native filter binary via package resources.
@@ -114,7 +116,8 @@ def meds_reader_filter():
     for module in submodules.iterdir():
         if module.name.startswith("meds_reader_filter"):
             with importlib.resources.as_file(module) as executible:
-                os.execv(executible, sys.argv)
+                return subprocess.call([str(executible), *sys.argv[1:]])
+    raise RuntimeError("Could not find the packaged meds_reader_filter executable")
 
 
 # Groups rows by subject_id and yields subjects with their rows.
