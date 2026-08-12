@@ -14,7 +14,6 @@
 #include <string>
 #include <thread>
 
-#include "binary_version.hh"
 #include "mmap_file.hh"
 #include "pdqsort.h"
 
@@ -120,10 +119,10 @@ void filter_database(const char* source, const char* destination,
                           destination_path / "metadata");
 
     if (subject_ids.empty()) {
-        std::ofstream empty_marker(destination_path / "meds_reader.empty");
-        empty_marker.exceptions(std::ofstream::badbit | std::ofstream::failbit);
-        empty_marker << "empty\n";
-        empty_marker.close();
+        std::filesystem::copy_file(
+            source_path / "meds_reader.version",
+            destination_path / "meds_reader.empty",
+            std::filesystem::copy_options::overwrite_existing);
     } else {
         {
             std::ofstream subject_ids_file(
@@ -219,11 +218,8 @@ void filter_database(const char* source, const char* destination,
     std::filesystem::copy(source_path / "meds_reader.properties",
                           destination_path / "meds_reader.properties");
 
-    {
-        std::ofstream version_file(destination_path / "meds_reader.version");
-        version_file.exceptions(std::ofstream::badbit |
-                                std::ofstream::failbit);
-        version_file << CURRENT_BINARY_VERSION << std::endl;
-        version_file.close();
-    }
+    std::filesystem::copy_file(
+        source_path / "meds_reader.version",
+        destination_path / "meds_reader.version",
+        std::filesystem::copy_options::overwrite_existing);
 }
