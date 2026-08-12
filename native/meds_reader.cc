@@ -907,13 +907,16 @@ SubjectDatabase::SubjectDatabase(std::string_view dir)
           root_directory / "meds_reader.length",
           std::filesystem::exists(root_directory / "meds_reader.empty")) {
     {
+        const bool is_empty_database =
+            std::filesystem::exists(root_directory / "meds_reader.empty");
+
         PyObject_Init(static_cast<PyObject*>(this), &Type);
         PyObjectWrapper pyarrow{PyImport_ImportModule("pyarrow")};
         if (pyarrow.borrow() == nullptr) {
             throw std::runtime_error("Could not import pyarrow");
         }
 
-        {
+        if (!is_empty_database) {
             std::ifstream version_file(root_directory / "meds_reader.version");
             int version = -1;
             if (!(version_file >> version)) {
