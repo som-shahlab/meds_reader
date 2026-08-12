@@ -21,6 +21,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <utility>
 #include <vector>
 #include <bit>
 
@@ -36,6 +37,21 @@
 namespace {
 
 bool datetime_initialized = false;
+
+// Splits an epoch-microsecond value using floor division for pre-epoch times.
+std::pair<int64_t, int64_t> split_timestamp(int64_t timestamp) {
+    constexpr int64_t microseconds_per_second = 1000 * 1000;
+
+    int64_t seconds = timestamp / microseconds_per_second;
+    int64_t microseconds = timestamp % microseconds_per_second;
+
+    if (microseconds < 0) {
+        microseconds += microseconds_per_second;
+        seconds -= 1;
+    }
+
+    return {seconds, microseconds};
+}
 
 // Releases a ZSTD decompression context.
 auto context_deleter = [](ZSTD_DCtx* context) { ZSTD_freeDCtx(context); };
@@ -378,13 +394,8 @@ struct TimePropertyReader : PropertyReader {
         int64_t seconds_per_day = (int64_t)(24 * 60 * 60);
         int64_t microseconds_per_second = (int64_t)(1000 * 1000);
 
-        int64_t start_seconds = *start_timestamp / microseconds_per_second;
-        int64_t start_micros = *start_timestamp % microseconds_per_second;
-
-        if (start_micros < 0) {
-            start_micros += microseconds_per_second;
-            start_seconds -= 1;
-        }
+        auto [start_seconds, start_micros] =
+            split_timestamp(*start_timestamp);
 
         absl::CivilSecond day(1970, 1, 1);
         day += start_seconds;
@@ -568,10 +579,9 @@ std::unique_ptr<PropertyReader> make_primitive_reader(
 PyObject* create_datetime(int64_t offset) {
     absl::CivilSecond day(1970, 1, 1);
 
-    int64_t microseconds_per_second = (int64_t)(1000 * 1000);
+    auto [seconds, microseconds] = split_timestamp(offset);
 
-    day += offset / microseconds_per_second;
-    int64_t microseconds = offset % microseconds_per_second;
+    day += seconds;
 
     PyObjectWrapper dt{PyDateTime_FromDateAndTime(
         day.year(), day.month(), day.day(), day.hour(), day.minute(),

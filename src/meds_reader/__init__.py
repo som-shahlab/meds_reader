@@ -8,8 +8,10 @@ import multiprocessing
 import multiprocessing.spawn
 import os
 import pickle
+import queue
 import random
 import sys
+import traceback
 import warnings
 from multiprocessing.context import SpawnProcess
 from typing import Any, Callable, Iterator, List, Optional, Sequence, Tuple, TypeVar, Union, cast
@@ -28,6 +30,7 @@ __doc__ = _meds_reader.__doc__
 A = TypeVar("A")
 
 WorkEntry = Tuple[bytes, Union[np.ndarray, pd.DataFrame]]
+WorkerResult = Tuple[bool, Any]
 
 mp = multiprocessing.get_context("spawn")
 
@@ -82,7 +85,7 @@ def meds_reader_verify():
             for property in database.properties:
                 actual = getattr(reader_event, property)
                 expected = pyarrow_event[property]
-                
+
                 assert actual == expected, (
                     f"Got {actual} expected {expected} for {reader_subject} {property}"
                     f" {pyarrow_event['time']} {reader_event.time}"
@@ -134,7 +137,7 @@ def _row_generator(database: _meds_reader.SubjectDatabase, data: pd.DataFrame):
 def _runner(
     path_to_database: str,
     input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]],
-    result_queue: multiprocessing.SimpleQueue[Any],
+    result_queue: multiprocessing.Queue[WorkerResult],
 ) -> None:
     database = _meds_reader.SubjectDatabase(path_to_database)
     while True:
@@ -142,19 +145,64 @@ def _runner(
         if next_work is None:
             break
 
-        map_func_str, subject_ids = next_work
+        try:
+            map_func_str, subject_ids = next_work
 
-        map_func = pickle.loads(map_func_str)
-        del map_func_str
+            map_func = pickle.loads(map_func_str)
+            del map_func_str
 
-        if isinstance(subject_ids, pd.DataFrame):
-            result = map_func(_row_generator(database, subject_ids))
-        elif isinstance(subject_ids, np.ndarray):
-            result = map_func(database[int(subject_id)] for subject_id in subject_ids)
-        else:
-            raise RuntimeError("Should only be given numpy arrays or data frames")
+            if isinstance(subject_ids, pd.DataFrame):
+                result = map_func(_row_generator(database, subject_ids))
+            elif isinstance(subject_ids, np.ndarray):
+                result = map_func(database[int(subject_id)] for subject_id in subject_ids)
+            else:
+                raise RuntimeError("Should only be given numpy arrays or data frames")
 
-        result_queue.put(result)
+            # Queue serialization happens in a feeder thread. Serialize here so
+            # unpickleable callback results are reported instead of disappearing.
+            result_queue.put((True, pickle.dumps(result)))
+        except BaseException as error:
+            error_details = (
+                type(error).__name__,
+                str(error),
+                traceback.format_exc(),
+            )
+            result_queue.put((False, error_details))
+
+
+# Yields worker results while ensuring failed jobs cannot poison later map calls.
+def _unwrap_worker_results(
+    result_queue: multiprocessing.Queue[WorkerResult],
+    num_parts: int,
+    processes: Sequence[SpawnProcess],
+) -> Iterator[Any]:
+    first_error = None
+    successful_results = []
+    completed_parts = 0
+
+    while completed_parts < num_parts:
+        try:
+            succeeded, payload = result_queue.get(timeout=0.1)
+        except queue.Empty:
+            failed_processes = [process for process in processes if process.exitcode is not None]
+            if failed_processes:
+                failures = ", ".join(
+                    f"pid {process.pid} exited with code {process.exitcode}" for process in failed_processes
+                )
+                raise RuntimeError(f"meds_reader map worker failure: {failures}")
+            continue
+
+        completed_parts += 1
+        if succeeded:
+            successful_results.append(pickle.loads(payload))
+        elif first_error is None:
+            first_error = payload
+
+    if first_error is not None:
+        error_type, message, formatted_traceback = first_error
+        raise RuntimeError(f"meds_reader map worker failed with {error_type}: {message}\n" f"{formatted_traceback}")
+
+    yield from successful_results
 
 
 class _SubjectDatabaseWrapper:
@@ -162,6 +210,7 @@ class _SubjectDatabaseWrapper:
     def __init__(self, db: SubjectDatabase, subjects_ids: np.ndarray):
         self._db = db
         self._selected_subjects = subjects_ids
+        self._selected_subject_set = frozenset(int(subject_id) for subject_id in subjects_ids)
         self.path_to_database = db.path_to_database
 
     @property
@@ -177,6 +226,8 @@ class _SubjectDatabaseWrapper:
     # Fetches a subject by id from the wrapped database.
     def __getitem__(self, subject_id: int) -> Any:
         """Retrieve a single subject from the database"""
+        if int(subject_id) not in self._selected_subject_set:
+            raise KeyError(subject_id)
         return self._db[subject_id]
 
     # Iterates over selected subject ids.
@@ -185,7 +236,11 @@ class _SubjectDatabaseWrapper:
 
     # Creates a new wrapper filtered to the provided ids.
     def filter(self, subject_ids: Sequence[int]):
-        return cast(SubjectDatabase, _SubjectDatabaseWrapper(self._db, np.sort(subject_ids)))
+        selected_subjects = np.intersect1d(
+            self._selected_subjects,
+            np.asarray(subject_ids, dtype=np.int64),
+        )
+        return cast(SubjectDatabase, _SubjectDatabaseWrapper(self._db, selected_subjects))
 
     # Applies a map function to subjects with aligned data rows.
     def map_with_data(
@@ -194,7 +249,9 @@ class _SubjectDatabaseWrapper:
         data: pd.DataFrame,
         assume_sorted: bool = False,
     ) -> Iterator[A]:
-        return self._db.map_with_data(map_func, data, assume_sorted)
+        assert "subject_id" in data.columns
+        selected_data = data[data["subject_id"].isin(self._selected_subject_set)]
+        return self._db.map_with_data(map_func, selected_data, assume_sorted)
 
     # Applies a map function to the selected subjects.
     def map(self, map_func: Callable[[Iterator[Any]], A]) -> Iterator[A]:
@@ -207,7 +264,7 @@ def _in_notebook():
     Returns ``True`` if the module is running in IPython kernel,
     ``False`` if in IPython shell or other Python shell.
     """
-    return 'ipykernel' in sys.modules
+    return "ipykernel" in sys.modules
 
 
 class SubjectDatabase:
@@ -220,12 +277,16 @@ class SubjectDatabase:
 
         if num_threads != 1:
             if _in_notebook():
-                warnings.warn("Warning: You are using meds_reader multiprocessing within a Jupyter notebook. This does not reliably work and your code might randomly fail.")
+                warnings.warn(
+                    "Warning: You are using meds_reader multiprocessing within a "
+                    "Jupyter notebook. This does not reliably work and your code "
+                    "might randomly fail."
+                )
 
             self._processes: Optional[List[SpawnProcess]] = []
 
             self._input_queue: multiprocessing.SimpleQueue[Optional[WorkEntry]] = mp.SimpleQueue()
-            self._result_queue: multiprocessing.SimpleQueue[Any] = mp.SimpleQueue()
+            self._result_queue: multiprocessing.Queue[WorkerResult] = mp.Queue()
 
             for _ in range(num_threads):
                 process = mp.Process(
@@ -264,9 +325,16 @@ class SubjectDatabase:
     # Filters the database view to the provided subject ids.
     def filter(self, subject_ids: Sequence[int]) -> SubjectDatabase:
         """Filter to a provided set of subject ids"""
+        selected_subjects = np.intersect1d(
+            self._all_subject_ids,
+            np.asarray(subject_ids, dtype=np.int64),
+        )
         return cast(
             SubjectDatabase,
-            _SubjectDatabaseWrapper(self, np.sort(subject_ids)),
+            _SubjectDatabaseWrapper(
+                self,
+                selected_subjects,
+            ),
         )
 
     # Applies a map function across all subjects.
@@ -303,7 +371,7 @@ class SubjectDatabase:
             last_index = 0
             for _ in range(self._num_threads):
                 next_index = min(num_rows, last_index + num_rows_per_shard)
-                while (next_index < num_rows) and (subject_ids[next_index - 1] == subject_ids[next_index]):
+                while (next_index < num_rows) and (subject_ids.iloc[next_index - 1] == subject_ids.iloc[next_index]):
                     next_index += 1
 
                 part = data.iloc[last_index:next_index]
@@ -315,7 +383,15 @@ class SubjectDatabase:
                 if last_index == num_rows:
                     break
 
-            return (self._result_queue.get() for _ in range(num_parts))
+            assert self._processes is not None
+            return cast(
+                Iterator[A],
+                _unwrap_worker_results(
+                    self._result_queue,
+                    num_parts,
+                    self._processes,
+                ),
+            )
         else:
             return iter((map_func(_row_generator(self._database, data)),))
 
@@ -323,6 +399,7 @@ class SubjectDatabase:
     def _map_fast(self, map_func: Callable[[Iterator[Any]], A], subject_ids: np.ndarray) -> Iterator[A]:
         """Apply the provided map function to the database"""
         if self._num_threads != 1:
+            assert self._processes is not None
             subjects_per_part = np.array_split(subject_ids, self._num_threads)
 
             map_func_p = pickle.dumps(map_func)
@@ -330,7 +407,14 @@ class SubjectDatabase:
             for part in subjects_per_part:
                 self._input_queue.put((map_func_p, part))
 
-            return (self._result_queue.get() for _ in subjects_per_part)
+            return cast(
+                Iterator[A],
+                _unwrap_worker_results(
+                    self._result_queue,
+                    len(subjects_per_part),
+                    self._processes,
+                ),
+            )
         else:
             return iter((map_func(self._database[int(subject_id)] for subject_id in subject_ids),))
 
@@ -345,6 +429,7 @@ class SubjectDatabase:
                 process.join()
             self._input_queue.close()
             self._result_queue.close()
+            self._result_queue.join_thread()
             self._processes = None
 
     # Warns if a worker pool is still running on destruction.

@@ -6,13 +6,15 @@
 ###############################################################################
 
 bazel_dep(name="pybind11_bazel", version = "2.13.6")
-bazel_dep(name="rules_foreign_cc", version = "0.14.0")
+bazel_dep(name="rules_foreign_cc", version = "0.15.1")
 bazel_dep(name="rules_python", version = "1.4.0-rc2")
 bazel_dep(name="platforms", version = "0.0.11")
 bazel_dep(name = "abseil-cpp", version = "20250127.1")
 bazel_dep(name = "zstd", version = "1.5.7")
 bazel_dep(name = "boost.iostreams", version = "1.87.0")
 bazel_dep(name = "cli11", version = "2.5.0")
+
+register_toolchains("@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain")
 
 #local_path_override(module_name="rules_python", path="C:\\Users\\ethan\\OneDrive\\Documents\\GitHub\\rules_python")
 git_override(module_name="rules_python", remote="https://github.com/EthanSteinberg/rules_python", commit="2b557301f67beff45fc672f88959c0338bf65ea0")
@@ -49,11 +51,10 @@ cc_library(
 
 http_archive(
     name="arrow",
-    strip_prefix="arrow-apache-arrow-15.0.2",
-    urls = ["https://github.com/apache/arrow/archive/refs/tags/apache-arrow-15.0.2.zip"],
+    strip_prefix="arrow-apache-arrow-21.0.0",
+    urls = ["https://github.com/apache/arrow/archive/refs/tags/apache-arrow-21.0.0.zip"],
     build_file_content = all_content,
-    sha256 = "c0ebc13e9bc428c0c9f617444dcd161140e2bf9a7c65c5ae6bf239e5567175fd",
-    patches = ["//patches:ThirdpartyToolchain.cmake.patch"],
+    sha256 = "b1f5c1bd6903ee4fc9d813f33685ac8fa7a4d6608248b01b8959d75ea4b78405",
 )
 
 

@@ -121,7 +121,8 @@ struct SubjectDatabase : public PyObject,
     PyObjectWrapper py_properties;
 
     absl::InlinedVector<Subject*, 4> subjects;
-    absl::InlinedVector<SubjectDatabaseIterator, 4> subject_database_iterators;
+    std::vector<std::unique_ptr<SubjectDatabaseIterator>>
+        subject_database_iterators;
 };
 
 PyMappingMethods SubjectDatabaseMappingMethods = {
@@ -210,7 +211,7 @@ struct SubjectEvents : public PyObject {
     int subject_length;
     Event* events;
     PyObject* length_obj;
-    absl::InlinedVector<SubjectEventsIterator, 4> iterators;
+    std::vector<std::unique_ptr<SubjectEventsIterator>> iterators;
 };
 
 PyMappingMethods SubjectEventsMappingMethods = {
@@ -297,7 +298,8 @@ struct Subject : public PyObject, fast_shared_ptr_object<Subject> {
 
     SubjectEvents events_obj;
 
-    absl::InlinedVector<EventPropertyIterator, 4> event_property_iterators;
+    std::vector<std::unique_ptr<EventPropertyIterator>>
+        event_property_iterators;
 
     // Python methods
     //-----------------------------------------
@@ -391,6 +393,7 @@ void SubjectEventsIterator::init(SubjectEvents* e) {
     subject_length = e->subject_length;
 
     event_index = 0;
+    in_use = true;
 }
 
 // Releases iterator references on destruction.
@@ -440,19 +443,19 @@ inline PyObject* SubjectEvents::iter() {
     size_t desired_index = iterators.size();
 
     for (size_t i = 0; i < iterators.size(); i++) {
-        if (!iterators[i].in_use) {
+        if (!iterators[i]->in_use) {
             desired_index = i;
             break;
         }
     }
 
     if (desired_index == iterators.size()) {
-        iterators.emplace_back();
+        iterators.emplace_back(std::make_unique<SubjectEventsIterator>());
     }
 
-    iterators[desired_index].init(this);
+    iterators[desired_index]->init(this);
 
-    return iterators.data() + desired_index;
+    return iterators[desired_index].get();
 }
 
 // Returns the number of events in the subject.
@@ -776,19 +779,20 @@ PyObject* Subject::create_event_property_iterator(Event* event) {
     size_t desired_index = event_property_iterators.size();
 
     for (size_t i = 0; i < event_property_iterators.size(); i++) {
-        if (!event_property_iterators[i].in_use) {
+        if (!event_property_iterators[i]->in_use) {
             desired_index = i;
+            break;
         }
     }
 
     if (desired_index == event_property_iterators.size()) {
-        event_property_iterators.emplace_back();
+        event_property_iterators.emplace_back(
+            std::make_unique<EventPropertyIterator>());
     }
 
-    event_property_iterators[desired_index].init(this, event);
+    event_property_iterators[desired_index]->init(this, event);
 
-    return static_cast<PyObject*>(event_property_iterators.data() +
-                                  desired_index);
+    return static_cast<PyObject*>(event_property_iterators[desired_index].get());
 }
 
 // Initializes an event with a parent subject.
@@ -1194,18 +1198,20 @@ PyObject* SubjectDatabase::iter() {
     size_t desired_index = subject_database_iterators.size();
 
     for (size_t i = 0; i < subject_database_iterators.size(); i++) {
-        if (!subject_database_iterators[i].in_use) {
+        if (!subject_database_iterators[i]->in_use) {
             desired_index = i;
+            break;
         }
     }
 
     if (desired_index == subject_database_iterators.size()) {
-        subject_database_iterators.emplace_back();
+        subject_database_iterators.emplace_back(
+            std::make_unique<SubjectDatabaseIterator>());
     }
 
-    subject_database_iterators[desired_index].init(this);
+    subject_database_iterators[desired_index]->init(this);
 
-    return subject_database_iterators.data() + desired_index;
+    return subject_database_iterators[desired_index].get();
 }
 
 struct PyModuleDef meds_reader_module = {

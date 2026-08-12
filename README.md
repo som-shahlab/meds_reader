@@ -1,4 +1,4 @@
-## meds_reader: A Pythonic interface for MEDS datasets
+# meds_reader: A Pythonic interface for MEDS datasets
 
 [![pypy](https://img.shields.io/pypi/v/meds_reader.svg)](https://pypi.org/project/meds_reader/) [![docs](https://readthedocs.org/projects/meds_reader/badge/?version=latest)](https://meds-reader.readthedocs.io/en/latest/) [![Build wheels](https://github.com/som-shahlab/meds_reader/actions/workflows/python-build.yml/badge.svg?branch=main)](https://github.com/som-shahlab/meds_reader/actions/workflows/python-build.yml?query=branch%3Amain) [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
@@ -6,7 +6,7 @@ meds_reader is a fast and easy-to-use library for reading and processing subject
 
 Inspired by HuggingFace Datasets, meds_reader transforms MEDS datasets into collections of Python objects, that can then be processed using normal Python functions.
 
-### Example
+## Example
 
 ```bash
 # First we need to convert to a database
@@ -45,7 +45,7 @@ To learn more, see our [full documentation](https://meds-reader.readthedocs.io/e
 
 <!-- End OnlyGithub -->
 
-### Installation
+## Installation
 
 meds_reader can be installed using pip.
 
@@ -53,6 +53,6 @@ meds_reader can be installed using pip.
 pip install meds_reader
 ```
 
-### Interactive Demo
+## Interactive Demo
 
 An interactive demo can be found at [Google Colab](https://colab.research.google.com/drive/1R1LrDIzhQyWldQWM0lyfjeF_n9I_iZT3?usp=sharing).

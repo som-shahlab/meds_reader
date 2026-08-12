@@ -51,7 +51,7 @@ class MmapFile {
         if (is_empty) {
             return absl::Span<const T>(nullptr, 0);
         } else {
-            
+
             return absl::Span<const T>((const T*)file.data(),
                 file.size() / sizeof(T));
         }

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm", "numpy>=2.0.2",]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,14 +7,17 @@ name = "meds_reader"
 dynamic = ["version"]
 description = "A Pythonic interface for MEDS datasets"
 readme = "README.md"
-license = {text = "Apache-2.0"}
-requires-python=">=3.9"
+license = "Apache-2.0"
+requires-python=">=3.10"
 dependencies = [
-  "pyarrow >= 9",
-  "meds == 0.3.3",
-  "numpy>=1.16",
+  "pyarrow>=9",
+  "meds>=0.4.1,<0.5",
+  "numpy>=1.26",
   "pandas>=2.2",
 ]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
 
 [tool.setuptools_scm]
 
@@ -42,18 +45,22 @@ line_length = 120
 target_version = ['py310']
 
 [tool.cibuildwheel]
-skip = ["*-musllinux_*", "pp*", "cp313-win*", "cp314-*", "cp313t-*", "cp314t-*"]
+skip = ["*-musllinux_*", "pp*", "cp313-win*", "cp314-*", "cp315-*", "cp313t-*", "cp314t-*", "cp315t-*"]
 archs = ["auto64"]
-test-command = [
-  "pip install \"numpy<2\"",
-  "pytest {package}/tests",
-  "pip install \"numpy>2\"",
-  "pytest {package}/tests",
-]
-test-requires = "pytest"
+test-command = "pytest {package}/tests"
+test-requires = "pytest>=8"
 before-build = [
 	"git status",
 	"git restore native/MODULE.bazel.lock"
+]
+
+[[tool.cibuildwheel.overrides]]
+select = "cp310-* cp311-* cp312-*"
+test-command = [
+  "pip install \"numpy<2\"",
+  "pytest {package}/tests",
+  "pip install --upgrade \"numpy>=2\"",
+  "pytest {package}/tests",
 ]
 
 [tool.cibuildwheel.linux]

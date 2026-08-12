@@ -23,6 +23,9 @@ cmake(
         "ARROW_WITH_ZSTD": "ON",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "12",
     },
+    env = {
+        "ARROW_THRIFT_URL": "https://archive.apache.org/dist/thrift/0.22.0/thrift-0.22.0.tar.gz",
+    },
     tags = ["requires-network"],
     generate_args = ["-GNinja", "-DCMAKE_RANLIB=/usr/bin/ranlib"],
     working_directory="cpp",
@@ -79,7 +82,7 @@ cc_library(
 cc_library(
     name="dtype",
     hdrs=["dtype.hh"],
-    
+
 )
 
 cc_library(

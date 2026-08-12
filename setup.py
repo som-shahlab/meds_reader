@@ -10,8 +10,8 @@ from typing import List
 import setuptools
 from setuptools.command.build_ext import build_ext
 
+BAZEL_CMD = "bazel"
 
-BAZEL_CMD = 'bazel'
 
 class BazelExtension(setuptools.Extension):
     def __init__(self, name: str, target: str, sourcedir: str):
@@ -62,7 +62,7 @@ class cmake_build_ext(build_ext):
             bazel_extra_args: List[str] = []
             extra_args: List[str] = []
 
-            if sys.platform == 'win32':
+            if sys.platform == "win32":
                 extra_args.extend(["--config=vs2022"])
 
             if source_env.get("DISTDIR"):
@@ -116,7 +116,7 @@ class cmake_build_ext(build_ext):
                 source_path = os.path.join(ext.sourcedir, "bazel-bin", ext.target)
 
                 if not os.path.exists(source_path):
-                    source_path = source_path + '.exe'
+                    source_path = source_path + ".exe"
 
                 shutil.copy(
                     source_path,

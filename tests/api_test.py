@@ -8,6 +8,7 @@ import sys
 import time
 
 import meds
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -21,7 +22,7 @@ metadata = {"dataset_name": "Testing Dataset!"}
 
 # Sleeps to avoid Windows file consistency issues.
 def sleep_on_windows():
-    if sys.platform == 'win32':
+    if sys.platform == "win32":
         # Windows has file consistency bugs/ issues
         # Need a sleep here
         time.sleep(5)
@@ -59,26 +60,27 @@ def meds_dataset(tmpdir: str):
         {
             "subject_id": 32,
             "time": datetime.datetime(2019, 12, 2),
-            "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
+            "datetime_value": datetime.datetime(1960, 4, 2, 2, 4, 29, 999999),
             "code": "Whatever2",
         },
         {
             "subject_id": 64,
-            "time": datetime.datetime(2012, 10, 2),
+            "time": datetime.datetime(1969, 12, 31, 23, 59, 58, 999999),
+            "datetime_value": datetime.datetime(1969, 12, 31, 23, 59, 59, 999999),
             "code": "Whatever",
             "other": "need",
             "numeric": 38,
         },
         {
             "subject_id": 64,
-            "time": datetime.datetime(2013, 10, 2),
-            "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
+            "time": datetime.datetime(1969, 12, 31, 23, 59, 59, 999999),
+            "datetime_value": datetime.datetime(1969, 12, 31, 23, 59, 59, 1),
             "code": "Whatever2",
         },
         {
             "subject_id": 64,
-            "time": datetime.datetime(2013, 10, 2),
-            "datetime_value": datetime.datetime(1999, 4, 2, 2, 4, 29, 999999),
+            "time": datetime.datetime(1970, 1, 1),
+            "datetime_value": datetime.datetime(1970, 1, 1),
             "code": "Whatever3",
         },
     ]
@@ -89,7 +91,13 @@ def meds_dataset(tmpdir: str):
         ("numeric", pa.float32()),
     ]
 
-    table = pa.Table.from_pylist(entries, schema=meds.schema.data_schema(custom_properties))
+    schema = pa.schema(
+        [
+            *meds.DataSchema.schema(),
+            *(pa.field(name, dtype) for name, dtype in custom_properties),
+        ]
+    )
+    table = pa.Table.from_pylist(entries, schema=schema)
 
     pq.write_table(table, os.path.join(data_dir, "entries.parquet"))
     return os.path.join(tmpdir, "meds")
@@ -123,8 +131,10 @@ def threaded_subject_database(tmpdir: str, meds_dataset: str):
     )
 
     sleep_on_windows()
-    
-    return meds_reader.SubjectDatabase(str(meds_reader_dir), num_threads=4)
+
+    database = meds_reader.SubjectDatabase(str(meds_reader_dir), num_threads=4)
+    yield database
+    database.terminate()
 
 
 # Verifies metadata passthrough from the dataset.
@@ -169,6 +179,28 @@ def h2(subjects_and_data):
     return result
 
 
+# Extracts all associated row markers for each subject shard.
+def collect_rows(subjects_and_data):
+    return [(subject.subject_id, tuple(row.marker for row in rows)) for subject, rows in subjects_and_data]
+
+
+# Raises inside a multiprocessing map worker.
+def failing_map(subjects):
+    list(subjects)
+    raise ValueError("intentional map failure")
+
+
+# Exits a multiprocessing worker without returning a queue result.
+def crashing_map(subjects):
+    os._exit(7)
+
+
+# Returns a value that multiprocessing queues cannot serialize.
+def unpickleable_map_result(subjects):
+    list(subjects)
+    return lambda: None
+
+
 # Exercises map and map_with_data helpers.
 def map_helper(subject_database):
 
@@ -202,6 +234,49 @@ def test_map_threaded(threaded_subject_database):
     threaded_subject_database.terminate()
 
 
+# Verifies dataframe shards use positional indexes and keep subjects intact.
+def test_map_with_data_nondefault_index(threaded_subject_database):
+    table = pd.DataFrame(
+        {
+            "subject_id": [32, 64, 64, 32],
+            "marker": ["32-a", "64-a", "64-b", "32-b"],
+        },
+        index=[10, 20, 30, 40],
+    )
+
+    results = list(threaded_subject_database.map_with_data(collect_rows, table))
+    flattened = {entry for result in results for entry in result}
+
+    assert flattened == {
+        (32, ("32-a", "32-b")),
+        (64, ("64-a", "64-b")),
+    }
+
+
+# Verifies worker exceptions are returned to the caller without poisoning the pool.
+def test_map_threaded_propagates_exceptions(threaded_subject_database):
+    with pytest.raises(RuntimeError, match="ValueError: intentional map failure"):
+        list(threaded_subject_database.map(failing_map))
+
+    results = list(threaded_subject_database.map(h))
+    assert {subject_id for result in results for subject_id in result} == {32, 64}
+
+
+# Verifies serialization failures are surfaced and do not poison the pool.
+def test_map_threaded_rejects_unpickleable_results(threaded_subject_database):
+    with pytest.raises(RuntimeError, match="(AttributeError|PicklingError)"):
+        list(threaded_subject_database.map(unpickleable_map_result))
+
+    results = list(threaded_subject_database.map(h))
+    assert {subject_id for result in results for subject_id in result} == {32, 64}
+
+
+# Verifies an unexpectedly terminated worker is detected instead of hanging.
+def test_map_threaded_detects_crashed_worker(threaded_subject_database):
+    with pytest.raises(RuntimeError, match="map worker failure"):
+        list(threaded_subject_database.map(crashing_map))
+
+
 # Verifies property schema exposed by the database.
 def test_properties(subject_database):
     print(subject_database.properties)
@@ -210,6 +285,7 @@ def test_properties(subject_database):
         "datetime_value": pa.timestamp("us"),
         "numeric_value": pa.float32(),
         "other": pa.string(),
+        "text_value": pa.large_string(),
         "time": pa.timestamp("us"),
         "numeric": pa.float32(),
     }
@@ -246,6 +322,7 @@ def test_lookup(subject_database):
 
     assert p.events[0].datetime_value is None
     assert p.events[1].datetime_value == datetime.datetime(1999, 4, 2, 2, 4, 29, 999999)
+    assert p.events[2].datetime_value == datetime.datetime(1960, 4, 2, 2, 4, 29, 999999)
 
     assert set(p.events[0]) == {
         ("code", "Whatever"),
@@ -257,6 +334,22 @@ def test_lookup(subject_database):
         ("time", datetime.datetime(2013, 10, 2)),
         ("datetime_value", datetime.datetime(1999, 4, 2, 2, 4, 29, 999999)),
     }
+
+
+# Verifies timestamp decoding on both sides of the Unix epoch boundary.
+def test_timestamp_epoch_boundaries(subject_database):
+    events = subject_database[64].events
+
+    assert [event.time for event in events] == [
+        datetime.datetime(1969, 12, 31, 23, 59, 58, 999999),
+        datetime.datetime(1969, 12, 31, 23, 59, 59, 999999),
+        datetime.datetime(1970, 1, 1),
+    ]
+    assert [event.datetime_value for event in events] == [
+        datetime.datetime(1969, 12, 31, 23, 59, 59, 999999),
+        datetime.datetime(1969, 12, 31, 23, 59, 59, 1),
+        datetime.datetime(1970, 1, 1),
+    ]
 
 
 # Verifies subject filtering preserves data consistency.
@@ -288,6 +381,105 @@ def test_filter(subject_database):
     assert p.events[0].datetime_value is None
     assert p.events[1].datetime_value == datetime.datetime(1999, 4, 2, 2, 4, 29, 999999)
 
+    with pytest.raises(KeyError):
+        sub_database[64]
+
+    assert len(sub_database.filter([64])) == 0
+
+    table = pd.DataFrame({"subject_id": [64, 32], "other": [1, 1000]})
+    results = list(sub_database.map_with_data(h2, table))
+    assert results == [[(32, 1000)]]
+
+
+# Verifies top-level filters deduplicate ids and discard ids absent from the database.
+def test_filter_normalizes_requested_ids(subject_database):
+    sub_database = subject_database.filter([64, 32, 32, 10_000])
+
+    assert len(sub_database) == 2
+    assert list(sub_database) == [32, 64]
+    with pytest.raises(KeyError):
+        sub_database[10_000]
+
+
+# Verifies the event container follows Python sequence indexing semantics.
+def test_event_sequence_indexing(subject_database):
+    events = subject_database[32].events
+
+    assert events[-1].code == "Whatever2"
+    assert [event.code for event in events[::-1]] == ["Whatever2", "Whatever2", "Whatever"]
+    with pytest.raises(IndexError):
+        events[len(events)]
+
+
+# Verifies simultaneous event and database iterators remain independent.
+def test_multiple_live_iterators(subject_database):
+    subject = subject_database[32]
+    first_events = iter(subject.events)
+    second_events = iter(subject.events)
+
+    assert next(first_events).code == "Whatever"
+    assert next(second_events).code == "Whatever"
+    assert next(first_events).code == "Whatever2"
+
+    database_iterators = [iter(subject_database._database) for _ in range(6)]
+    assert [next(iterator) for iterator in database_iterators] == [32] * 6
+
+    property_iterators = [iter(subject.events[0]) for _ in range(6)]
+    first_properties = [next(iterator) for iterator in property_iterators]
+    assert first_properties == [first_properties[0]] * 6
+
+
+# Verifies the native filter accepts an empty selection and rejects missing ids.
+def test_native_filter_bounds(tmpdir: str, subject_database):
+    empty_ids_path = os.path.join(tmpdir, "empty_subject_ids")
+    open(empty_ids_path, "wb").close()
+    empty_database_path = os.path.join(tmpdir, "empty_database")
+
+    subprocess.run(
+        [
+            "meds_reader_filter",
+            subject_database.path_to_database,
+            empty_database_path,
+            empty_ids_path,
+        ],
+        check=True,
+    )
+    assert len(meds_reader.SubjectDatabase(empty_database_path)) == 0
+
+    duplicate_ids_path = os.path.join(tmpdir, "duplicate_subject_ids")
+    np.array([64, 32, 64, 32], dtype=np.int64).tofile(duplicate_ids_path)
+    duplicate_database_path = os.path.join(tmpdir, "duplicate_database")
+
+    subprocess.run(
+        [
+            "meds_reader_filter",
+            subject_database.path_to_database,
+            duplicate_database_path,
+            duplicate_ids_path,
+        ],
+        check=True,
+    )
+    duplicate_database = meds_reader.SubjectDatabase(duplicate_database_path)
+    assert list(duplicate_database) == [32, 64]
+    assert len(duplicate_database) == 2
+
+    missing_ids_path = os.path.join(tmpdir, "missing_subject_ids")
+    np.array([10_000], dtype=np.int64).tofile(missing_ids_path)
+    missing_database_path = os.path.join(tmpdir, "missing_database")
+
+    result = subprocess.run(
+        [
+            "meds_reader_filter",
+            subject_database.path_to_database,
+            missing_database_path,
+            missing_ids_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "Could not find subject_id 10000" in result.stderr
+
 
 # Example transform function for testing dataset transforms.
 def _example_transform(
@@ -296,6 +488,26 @@ def _example_transform(
     subject.subject_id *= 10
     print(subject)
     return subject
+
+
+# Fails inside a dataset transform worker.
+def _failing_transform(subject: meds_reader.transform.MutableSubject):
+    raise ValueError(f"intentional transform failure for {subject.subject_id}")
+
+
+# Verifies mutable transform model defaults never leak across instances.
+def test_mutable_transform_defaults_are_isolated():
+    first_subject = meds_reader.transform.MutableSubject(1)
+    second_subject = meds_reader.transform.MutableSubject(2)
+    first_subject.events.append(meds_reader.transform.MutableEvent(None, "first"))
+
+    assert len(second_subject.events) == 0
+
+    first_event = meds_reader.transform.MutableEvent(None, "first")
+    second_event = meds_reader.transform.MutableEvent(None, "second")
+    first_event.extra = "value"
+
+    assert second_event.extra is None
 
 
 # Verifies dataset transform and conversion pipeline.
@@ -310,7 +522,7 @@ def test_transform(tmpdir: str, meds_dataset: str):
         ["meds_reader_convert", target, meds_reader_dir, "--num_threads", "4"],
         check=True,
     )
-    
+
     sleep_on_windows()
 
     database = meds_reader.SubjectDatabase(str(meds_reader_dir))
@@ -318,3 +530,16 @@ def test_transform(tmpdir: str, meds_dataset: str):
     assert len(database) == 2
 
     assert list(database) == [32 * 10, 64 * 10]
+
+
+# Verifies child transform failures are surfaced to the parent process.
+def test_transform_propagates_worker_failure(tmpdir: str, meds_dataset: str):
+    target = os.path.join(tmpdir, "failed_transform")
+
+    with pytest.raises(RuntimeError, match="MEDS transform worker failure"):
+        meds_reader.transform.transform_meds_dataset(
+            meds_dataset,
+            target,
+            _failing_transform,
+            2,
+        )

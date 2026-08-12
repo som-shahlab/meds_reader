@@ -19,9 +19,8 @@ class MutableSubject:
     """A subject consists of a subject_id and a sequence of Events"""
 
     # Initializes a subject with an ID and mutable event list.
-    def __init__(self, subject_id, events: List[MutableEvent] = []):
-        # Create a new list to avoid bugs related to shared default parameters
-        if events == []:
+    def __init__(self, subject_id: int, events: Optional[List[MutableEvent]] = None):
+        if events is None:
             events = []
 
         self.subject_id = subject_id
@@ -45,8 +44,13 @@ class MutableEvent:
     It contains a time and code, and potentially more properties."""
 
     # Initializes an event with time, code, and arbitrary properties.
-    def __init__(self, time: datetime.datetime, code: str, properties: Dict[str, Any] = {}):
-        if properties == {}:
+    def __init__(
+        self,
+        time: Optional[datetime.datetime],
+        code: str,
+        properties: Optional[Dict[str, Any]] = None,
+    ):
+        if properties is None:
             properties = {}
 
         super().__setattr__("properties", properties)
@@ -58,7 +62,7 @@ class MutableEvent:
     "The time the event occurred"
 
     code: str
-    "An identifier for the type of event that occured"
+    "An identifier for the type of event that occurred"
 
     # Looks up a dynamic property by name.
     def __getattr__(self, name: str) -> Any:
@@ -166,7 +170,7 @@ def _transform_meds_dataset_worker(
 def transform_meds_dataset(
     source_dataset_path: str,
     target_dataset_path: str,
-    transform_func: Callable[[MutableSubject], MutableSubject],
+    transform_func: Callable[[MutableSubject], Optional[MutableSubject]],
     num_threads: int = 1,
     schema: Optional[pa.Schema] = None,
 ):
@@ -201,6 +205,8 @@ def transform_meds_dataset(
 
     os.mkdir(os.path.join(target_dataset_path, "data"))
 
+    failed_processes: List[SpawnProcess] = []
+
     if num_threads == 1:
         _transform_meds_dataset_worker(
             work_queue,
@@ -223,4 +229,10 @@ def transform_meds_dataset(
         for process in processes:
             process.join()
 
+        failed_processes = [process for process in processes if process.exitcode != 0]
+
     work_queue.close()
+
+    if num_threads != 1 and failed_processes:
+        failures = ", ".join(f"pid {process.pid} exited with code {process.exitcode}" for process in failed_processes)
+        raise RuntimeError(f"MEDS transform worker failure: {failures}")

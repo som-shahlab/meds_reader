@@ -3,6 +3,7 @@
 // This file parses command-line arguments and delegates to the native
 // filter routine to create a subset database by subject id.
 #include <CLI/CLI.hpp>
+#include <exception>
 #include <iostream>
 
 #include "filter_database.hh"
@@ -35,8 +36,13 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    filter_database(source_dataset.c_str(), destination_database.c_str(),
-                    subject_ids_file.c_str(), num_threads);
+    try {
+        filter_database(source_dataset.c_str(), destination_database.c_str(),
+                        subject_ids_file.c_str(), num_threads);
+    } catch (const std::exception& error) {
+        std::cerr << "meds_reader_filter failed: " << error.what() << std::endl;
+        return 1;
+    }
 
     return 0;
 }

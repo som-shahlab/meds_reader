@@ -2478,7 +2478,7 @@ void create_database(const char* source, const char* destination,
         std::ofstream subject_ids_file(
             destination_path / "subject_id",
             std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
-        
+
         subject_ids_file.exceptions ( std::ifstream::failbit | std::ifstream::badbit );
 
         subject_ids_file.write((const char*)flat_subject_ids.data(),

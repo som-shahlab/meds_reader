@@ -2,6 +2,8 @@ import os
 import shutil
 import sys
 
+from setuptools_scm import get_version
+
 # Configuration file for the Sphinx documentation builder.
 
 # -- Project information
@@ -10,8 +12,8 @@ project = "meds_reader"
 copyright = "2024, Ethan Steinberg"
 author = "Ethan Steinberg"
 
-release = "0.1"
-version = "0.1.0"
+release = get_version(root="../..", relative_to=__file__)
+version = release
 
 # -- General configuration
 
