@@ -5,12 +5,14 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import time
 from typing import List
 
 import setuptools
 from setuptools.command.build_ext import build_ext
 
 BAZEL_CMD = "bazel"
+BAZEL_ATTEMPTS = 6
 
 
 class BazelExtension(setuptools.Extension):
@@ -28,13 +30,33 @@ def has_nvcc():
         return False
 
 
+def run_bazel(args, sourcedir, env):
+    for attempt in range(1, BAZEL_ATTEMPTS + 1):
+        try:
+            subprocess.run(
+                args=[BAZEL_CMD] + args,
+                cwd=sourcedir,
+                env=env,
+                check=True,
+            )
+            return
+        except subprocess.CalledProcessError:
+            if attempt == BAZEL_ATTEMPTS:
+                raise
+            delay = 2 ** (attempt - 1)
+            print(
+                f"Bazel failed; retrying in {delay}s " f"(attempt {attempt + 1}/{BAZEL_ATTEMPTS})",
+                flush=True,
+            )
+            time.sleep(delay)
+
+
 def can_build_simple(sourcedir, env, bazel_extra_args):
     try:
-        subprocess.run(
-            args=[BAZEL_CMD] + bazel_extra_args + ["build", "-c", "opt", "simple_test"],
-            cwd=sourcedir,
-            env=env,
-            check=True,
+        run_bazel(
+            bazel_extra_args + ["build", "-c", "opt", "simple_test"],
+            sourcedir,
+            env,
         )
         return True
     except subprocess.CalledProcessError:
@@ -86,9 +108,8 @@ class cmake_build_ext(build_ext):
 
             targets = [ext.target for ext in bazel_extensions]
 
-            subprocess.run(
-                args=[BAZEL_CMD]
-                + bazel_extra_args
+            run_bazel(
+                bazel_extra_args
                 + [
                     "build",
                     "-c",
@@ -96,9 +117,8 @@ class cmake_build_ext(build_ext):
                 ]
                 + targets
                 + extra_args,
-                cwd=sourcedir,
-                env=env,
-                check=True,
+                sourcedir,
+                env,
             )
 
             for ext in bazel_extensions:
