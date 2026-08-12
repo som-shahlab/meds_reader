@@ -445,6 +445,8 @@ def test_native_filter_bounds(tmpdir: str, subject_database):
         check=True,
     )
     assert os.path.getsize(os.path.join(empty_database_path, "meds_reader.empty")) > 0
+    with open(os.path.join(empty_database_path, "meds_reader.version")) as version_file:
+        assert version_file.read() == "2\n"
     assert not os.path.exists(os.path.join(empty_database_path, "subject_id"))
     assert not os.path.exists(os.path.join(empty_database_path, "meds_reader.length"))
     assert len(meds_reader.SubjectDatabase(empty_database_path)) == 0

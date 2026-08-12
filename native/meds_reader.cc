@@ -915,8 +915,11 @@ SubjectDatabase::SubjectDatabase(std::string_view dir)
 
         {
             std::ifstream version_file(root_directory / "meds_reader.version");
-            int version;
-            version_file >> version;
+            int version = -1;
+            if (!(version_file >> version)) {
+                throw std::runtime_error(
+                    "Could not read the meds_reader binary version");
+            }
 
             if (version != CURRENT_BINARY_VERSION) {
                 throw std::runtime_error(

@@ -221,6 +221,9 @@ void filter_database(const char* source, const char* destination,
 
     {
         std::ofstream version_file(destination_path / "meds_reader.version");
+        version_file.exceptions(std::ofstream::badbit |
+                                std::ofstream::failbit);
         version_file << CURRENT_BINARY_VERSION << std::endl;
+        version_file.close();
     }
 }
