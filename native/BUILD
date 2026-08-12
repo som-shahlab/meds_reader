@@ -3,6 +3,7 @@ load(
 )
 
 load("@pybind11_bazel//:build_defs.bzl", "pybind_extension", "pybind_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 
 cmake(
     name = "arrow",
