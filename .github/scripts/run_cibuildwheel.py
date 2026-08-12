@@ -24,6 +24,8 @@ for line in process.stdout:
 
 return_code = process.wait()
 if return_code:
-    details = escape_workflow_command("".join(recent_output))
+    # GitHub truncates annotation messages at 4 KiB. Keep the end of the
+    # output, where build tools and tracebacks report the actual failure.
+    details = escape_workflow_command("".join(recent_output)[-3900:])
     print(f"::error title=cibuildwheel failed::{details}")
     raise SystemExit(return_code)

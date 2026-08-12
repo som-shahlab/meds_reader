@@ -41,6 +41,10 @@ cc_library(
         "@bazel_tools//src/conditions:windows": ["@arrow_vcpkg//:arrow"],
         "//conditions:default": [":arrow"],
     }),
+    linkopts = select({
+        "@platforms//os:linux": ["-ldl"],
+        "//conditions:default": [],
+    }),
 )
 
 cc_binary(
