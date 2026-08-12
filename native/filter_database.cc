@@ -20,6 +20,21 @@
 
 namespace {
 
+// Creates an empty file portably. On Windows, opening a new file without
+// writing did not reliably create it, while resize_file could briefly retain
+// an exclusive handle. Copying first and explicitly truncating and closing the
+// stream avoids both behaviors.
+void copy_as_empty(const std::filesystem::path& source_path,
+                   const std::filesystem::path& destination_path) {
+    std::filesystem::copy_file(source_path, destination_path);
+
+    std::ofstream destination(destination_path,
+                              std::ios_base::out | std::ios_base::binary |
+                                  std::ios_base::trunc);
+    destination.exceptions(std::ofstream::badbit | std::ofstream::failbit);
+    destination.close();
+}
+
 // Copies selected entries from a byte-offset table into a new file.
 void copy_subset(const std::filesystem::path& source_path,
                  const std::filesystem::path& destination_path,
@@ -123,9 +138,8 @@ void filter_database(const char* source, const char* destination,
         std::filesystem::path destination_subject_ids_path =
             destination_path / "subject_id";
         if (subject_ids.empty()) {
-            std::filesystem::copy_file(source_path / "subject_id",
-                                       destination_subject_ids_path);
-            std::filesystem::resize_file(destination_subject_ids_path, 0);
+            copy_as_empty(source_path / "subject_id",
+                          destination_subject_ids_path);
         } else {
             std::ofstream subject_ids_file(
                 destination_subject_ids_path,
@@ -182,9 +196,8 @@ void filter_database(const char* source, const char* destination,
         std::filesystem::path destination_subject_lengths_path =
             destination_path / "meds_reader.length";
         if (subject_lengths.empty()) {
-            std::filesystem::copy_file(source_path / "meds_reader.length",
-                                       destination_subject_lengths_path);
-            std::filesystem::resize_file(destination_subject_lengths_path, 0);
+            copy_as_empty(source_path / "meds_reader.length",
+                          destination_subject_lengths_path);
         } else {
             std::ofstream subject_lengths_file(
                 destination_subject_lengths_path,
