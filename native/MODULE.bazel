@@ -12,8 +12,8 @@ bazel_dep(name="rules_python", version = "1.4.0-rc2")
 bazel_dep(name="platforms", version = "1.0.0")
 bazel_dep(name = "abseil-cpp", version = "20250127.1")
 bazel_dep(name = "zstd", version = "1.5.7")
-bazel_dep(name = "boost.iostreams", version = "1.87.0")
-bazel_dep(name = "cli11", version = "2.5.0")
+bazel_dep(name = "boost.iostreams", version = "1.87.0.bcr.1")
+bazel_dep(name = "cli11", version = "2.6.2")
 
 register_toolchains("@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain")
 
@@ -41,6 +41,7 @@ new_git_repository(
     commit = "79cec4c3bf1ca23ea4a03adfcd3c2c3659684dd2",
     shallow_since = "1580387311 -0500",
     build_file_content = """
+load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
     name = "concurrentqueue",

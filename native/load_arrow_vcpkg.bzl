@@ -5,6 +5,8 @@ def _impl(repository_ctx):
   repository_ctx.execute(["./vcpkg/vcpkg.exe", "install", "arrow:x64-windows-static-md"], timeout=6000)
 
   repository_ctx.file("BUILD", """
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
 cc_library(
   name="arrow",
     hdrs = glob(["vcpkg/packages/arrow_x64-windows-static-md/include/**/*.h"]),
