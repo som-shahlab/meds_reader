@@ -79,13 +79,6 @@ class cmake_build_ext(build_ext):
                     sourcedir=sourcedir, env=env, bazel_extra_args=bazel_extra_args
                 ), "Cannot build C++ extension"
 
-            subprocess.run(
-                args=[BAZEL_CMD, "clean", "--expunge"],
-                cwd=sourcedir,
-                env=env,
-                check=True,
-            )
-
             if source_env.get("DEBUG", False):
                 compile_mode = "dbg"
             else:
