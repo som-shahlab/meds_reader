@@ -14,7 +14,15 @@ def _execute_or_fail(repository_ctx, arguments, timeout = 600, attempts = 1):
   ))
 
 def _impl(repository_ctx):
-  _execute_or_fail(repository_ctx, ["git", "clone", "https://github.com/microsoft/vcpkg.git"])
+  _execute_or_fail(repository_ctx, [
+      "git",
+      "clone",
+      "--branch",
+      "2026.05.25",
+      "--depth",
+      "1",
+      "https://github.com/microsoft/vcpkg.git",
+  ])
   _execute_or_fail(repository_ctx, ["./vcpkg/bootstrap-vcpkg.bat"], attempts = 2)
   _execute_or_fail(
       repository_ctx,
