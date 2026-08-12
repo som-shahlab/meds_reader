@@ -12,7 +12,12 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <system_error>
 #include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "binary_version.hh"
 #include "mmap_file.hh"
@@ -20,19 +25,33 @@
 
 namespace {
 
-// Creates an empty file portably. On Windows, opening a new file without
-// writing did not reliably create it, while resize_file could briefly retain
-// an exclusive handle. Copying first and explicitly truncating and closing the
-// stream avoids both behaviors.
-void copy_as_empty(const std::filesystem::path& source_path,
-                   const std::filesystem::path& destination_path) {
-    std::filesystem::copy_file(source_path, destination_path);
-
-    std::ofstream destination(destination_path,
+// Creates an empty file and closes it before returning. The Windows standard
+// library did not reliably materialize an empty output file, so use the native
+// file API there.
+void create_empty_file(const std::filesystem::path& path) {
+#ifdef _WIN32
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                  FILE_SHARE_DELETE,
+                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                              nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        throw std::system_error(GetLastError(), std::system_category(),
+                                "Could not create empty file " +
+                                    path.string());
+    }
+    if (!CloseHandle(file)) {
+        throw std::system_error(GetLastError(), std::system_category(),
+                                "Could not close empty file " +
+                                    path.string());
+    }
+#else
+    std::ofstream destination(path,
                               std::ios_base::out | std::ios_base::binary |
                                   std::ios_base::trunc);
     destination.exceptions(std::ofstream::badbit | std::ofstream::failbit);
     destination.close();
+#endif
 }
 
 // Copies selected entries from a byte-offset table into a new file.
@@ -138,8 +157,7 @@ void filter_database(const char* source, const char* destination,
         std::filesystem::path destination_subject_ids_path =
             destination_path / "subject_id";
         if (subject_ids.empty()) {
-            copy_as_empty(source_path / "subject_id",
-                          destination_subject_ids_path);
+            create_empty_file(destination_subject_ids_path);
         } else {
             std::ofstream subject_ids_file(
                 destination_subject_ids_path,
@@ -196,8 +214,7 @@ void filter_database(const char* source, const char* destination,
         std::filesystem::path destination_subject_lengths_path =
             destination_path / "meds_reader.length";
         if (subject_lengths.empty()) {
-            copy_as_empty(source_path / "meds_reader.length",
-                          destination_subject_lengths_path);
+            create_empty_file(destination_subject_lengths_path);
         } else {
             std::ofstream subject_lengths_file(
                 destination_subject_lengths_path,
