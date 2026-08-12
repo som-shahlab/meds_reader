@@ -74,6 +74,7 @@ cc_library(
     srcs=["filter_database.cc", "pdqsort.h"],
     hdrs=["filter_database.hh"],
     deps=[
+        ":binary_version",
         ":mmap_file",
     ],
 )

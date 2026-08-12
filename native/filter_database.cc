@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 
+#include "binary_version.hh"
 #include "mmap_file.hh"
 #include "pdqsort.h"
 
@@ -213,6 +214,8 @@ void filter_database(const char* source, const char* destination,
     std::filesystem::copy(source_path / "meds_reader.properties",
                           destination_path / "meds_reader.properties");
 
-    std::filesystem::copy(source_path / "meds_reader.version",
-                          destination_path / "meds_reader.version");
+    {
+        std::ofstream version_file(destination_path / "meds_reader.version");
+        version_file << CURRENT_BINARY_VERSION << std::endl;
+    }
 }
