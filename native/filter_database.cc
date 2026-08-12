@@ -120,11 +120,17 @@ void filter_database(const char* source, const char* destination,
                           destination_path / "metadata");
 
     {
-        std::ofstream subject_ids_file(
-            destination_path / "subject_id",
-            std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
-
-        if (!subject_ids.empty()) {
+        std::filesystem::path destination_subject_ids_path =
+            destination_path / "subject_id";
+        if (subject_ids.empty()) {
+            std::filesystem::copy_file(source_path / "subject_id",
+                                       destination_subject_ids_path);
+            std::filesystem::resize_file(destination_subject_ids_path, 0);
+        } else {
+            std::ofstream subject_ids_file(
+                destination_subject_ids_path,
+                std::ios_base::out | std::ios_base::binary |
+                    std::ios_base::trunc);
             subject_ids_file.write((const char*)subject_ids.data(),
                                    sizeof(int64_t) * subject_ids.size());
         }
@@ -173,11 +179,17 @@ void filter_database(const char* source, const char* destination,
             subject_lengths.push_back(source_subject_lengths[offset]);
         }
 
-        std::ofstream subject_lengths_file(
-            destination_path / "meds_reader.length",
-            std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
-
-        if (!subject_lengths.empty()) {
+        std::filesystem::path destination_subject_lengths_path =
+            destination_path / "meds_reader.length";
+        if (subject_lengths.empty()) {
+            std::filesystem::copy_file(source_path / "meds_reader.length",
+                                       destination_subject_lengths_path);
+            std::filesystem::resize_file(destination_subject_lengths_path, 0);
+        } else {
+            std::ofstream subject_lengths_file(
+                destination_subject_lengths_path,
+                std::ios_base::out | std::ios_base::binary |
+                    std::ios_base::trunc);
             subject_lengths_file.write(
                 (const char*)subject_lengths.data(),
                 sizeof(uint32_t) * subject_lengths.size());
